@@ -1,0 +1,31 @@
+data:
+  source: "akshare"
+
+  start_date: "20180101"
+  end_date: "20251231"
+
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  factor_dir: "data/factors"
+  signal_dir: "data/signals"
+
+  benchmark_code: "000905.SH"
+  benchmarks:
+    csi500: "000905.SH"
+    csi1000: "000852.SH"
+
+  download:
+    max_workers: 4
+    retries: 3
+    retry_sleep: 1.0
+
+  tables:
+    stock_basic: "stock_basic.parquet"
+    trade_calendar: "trade_calendar.parquet"
+    daily: "daily.parquet"
+    adj_factor: "adj_factor.parquet"
+    daily_basic: "daily_basic.parquet"
+    fina_indicator: "fina_indicator.parquet"
+    industry_member: "industry_member.parquet"
+    stk_limit: "stk_limit.parquet"
+    index_daily: "index_daily.parquet"

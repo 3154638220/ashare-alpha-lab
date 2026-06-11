@@ -1,0 +1,41 @@
+strategy:
+  name: "quality_value_lowvol_mvp"
+
+  rebalance:
+    frequency: "monthly"
+    day: "first_trading_day"
+    signal_lag_days: 1
+
+  universe:
+    min_list_days: 250
+    min_avg_amount_20: 30000000
+    max_suspend_days_60: 10
+    exclude_st: true
+    exclude_new_stock: true
+    exclude_negative_pe: true
+    exclude_negative_pb: true
+    exclude_bj: true
+
+  factors:
+    weights:
+      value: 0.25
+      quality: 0.20
+      growth: 0.15
+      lowvol: 0.15
+      momentum: 0.10
+      reversal: 0.10
+      leverage: 0.05
+
+    winsorize:
+      lower: 0.01
+      upper: 0.99
+
+    standardize:
+      method: "industry_zscore"
+
+  portfolio:
+    top_n: 50
+    weighting: "equal_weight"
+    max_stock_weight: 0.02
+    max_industry_weight: 0.20
+    min_stock_weight: 0.005

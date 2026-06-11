@@ -1,0 +1,10 @@
+cost:
+  commission_rate: 0.0003
+  stamp_tax_rate: 0.0005
+  exchange_fee_rate: 0.0000341
+  slippage_rate: 0.0005
+
+  lot_size: 100
+
+  liquidity:
+    max_trade_pct_of_avg_amount_20: 0.05

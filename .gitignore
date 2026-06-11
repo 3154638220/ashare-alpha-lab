@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.parquet
+*.csv
+*.png
+*.json
+results/
+data/raw/
+data/processed/
+data/factors/
+data/signals/
+.env
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/

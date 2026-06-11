@@ -1,0 +1,22 @@
+backtest:
+  init_cash: 10000000
+  start_date: "20180101"
+  end_date: "20251231"
+
+  price_type:
+    buy: "adj_open"
+    sell: "adj_open"
+    mark_to_market: "adj_close"
+
+  execution:
+    forbid_buy_limit_up: true
+    forbid_sell_limit_down: true
+    forbid_trade_suspended: true
+    use_lot_size: true
+    allow_partial_fill: true
+
+  output:
+    result_dir: "results"
+    save_trades: true
+    save_positions: true
+    save_nav: true
