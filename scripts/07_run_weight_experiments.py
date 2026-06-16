@@ -11,9 +11,22 @@ from tqdm import tqdm
 
 from ashare_alpha.analysis.metrics import calc_performance
 from ashare_alpha.analysis.weight_experiments import (
+    build_reversal_ablation_experiments,
+    build_reversal_growth_buffer_cost_experiments,
+    build_reversal_growth_validation_experiments,
+    build_reversal_growth_turnover_control_experiments,
+    build_rank_buffered_signal,
+    calc_annual_return_diagnostics,
+    calc_monthly_drawdown_diagnostics,
+    calc_rebalance_turnover,
     calc_portfolio_factor_exposure,
     derive_ic_weighted_static_weights,
     flatten_performance_metrics,
+    scale_cost_config,
+    summarize_annual_return_diagnostics,
+    summarize_monthly_drawdown_diagnostics,
+    summarize_rebalance_turnover,
+    summarize_rebalance_turnover_by_year,
     summarize_portfolio_factor_exposure,
 )
 from ashare_alpha.backtest.engine import BacktestEngine
@@ -155,6 +168,10 @@ def _experiment_definitions(config: dict, factor_summary: pd.DataFrame) -> list[
             "is_reference": False,
             "notes": "Static weights proportional to positive rebalance-universe mean IC, min_mean_ic=0.01.",
         },
+        *build_reversal_ablation_experiments(),
+        *build_reversal_growth_validation_experiments(),
+        *build_reversal_growth_turnover_control_experiments(),
+        *build_reversal_growth_buffer_cost_experiments(),
     ]
 
 
@@ -207,8 +224,16 @@ def _generate_experiment_weights(
     universe_by_date: dict[str, pd.DataFrame],
     config: dict,
     trade_dates: list[str],
+    selection_config: dict | None = None,
 ) -> pd.DataFrame:
     all_weights = []
+    previous_holdings: set[str] = set()
+    portfolio_cfg = config["strategy"]["portfolio"]
+    selection_cfg = selection_config or {}
+    top_n = int(selection_cfg.get("top_n", portfolio_cfg.get("top_n", 50)))
+    selection_method = selection_cfg.get("method", "top_n")
+    weight_config = deepcopy(config)
+    weight_config["strategy"]["portfolio"]["top_n"] = top_n
 
     for trade_date in tqdm(sorted(universe_by_date), desc="Generating experiment signals"):
         universe = universe_by_date[trade_date]
@@ -216,18 +241,30 @@ def _generate_experiment_weights(
         if date_scores.empty:
             continue
 
-        signal = generate_signal(date_scores, universe, config)
+        if selection_method == "rank_buffer":
+            signal = build_rank_buffered_signal(
+                date_scores,
+                universe,
+                previous_holdings=previous_holdings,
+                top_n=top_n,
+                entry_rank=int(selection_cfg.get("entry_rank", top_n)),
+                exit_rank=int(selection_cfg.get("exit_rank", top_n)),
+            )
+        else:
+            signal = generate_signal(date_scores, universe, weight_config)
+
         if signal.empty:
             continue
 
-        weights = generate_target_weights(signal, config)
-        weights = apply_position_constraints(weights, config)
+        weights = generate_target_weights(signal, weight_config)
+        weights = apply_position_constraints(weights, weight_config)
         if weights.empty:
             continue
 
         weights["rebalance_date"] = trade_date
         weights["execution_date"] = get_next_trade_date(trade_date, trade_dates) or trade_date
         all_weights.append(weights)
+        previous_holdings = set(weights["ts_code"].astype(str))
 
     if not all_weights:
         return pd.DataFrame()
@@ -240,6 +277,7 @@ def _run_backtest(
     price_panel: pd.DataFrame,
     target_weights: pd.DataFrame,
     trade_dates: list[str],
+    cost_config: dict | None = None,
 ) -> dict:
     bt_cfg = config["backtest"]
     start_date = bt_cfg["start_date"]
@@ -257,7 +295,7 @@ def _run_backtest(
         trade_dates=backtest_dates,
         rebalance_dates=rebalance_dates,
         init_cash=bt_cfg.get("init_cash", 10000000),
-        cost_config=config["cost"],
+        cost_config=cost_config or config["cost"],
     )
     return engine.run()
 
@@ -297,8 +335,14 @@ def _save_experiment_outputs(
     metrics: dict,
     exposure: pd.DataFrame,
     exposure_summary: dict,
+    turnover: pd.DataFrame,
+    turnover_summary: dict,
+    annual_returns: pd.DataFrame,
+    monthly_drawdown: pd.DataFrame,
+    turnover_by_year: pd.DataFrame,
     filter_stats: pd.DataFrame,
     factor_summary_source: str,
+    cost_config: dict,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -307,6 +351,23 @@ def _save_experiment_outputs(
     exposure.to_csv(output_dir / "portfolio_factor_exposure.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame([exposure_summary]).to_csv(
         output_dir / "portfolio_factor_exposure_summary.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    turnover.to_csv(output_dir / "rebalance_turnover.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame([turnover_summary]).to_csv(
+        output_dir / "rebalance_turnover_summary.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    annual_returns.to_csv(output_dir / "annual_returns.csv", index=False, encoding="utf-8-sig")
+    monthly_drawdown.to_csv(
+        output_dir / "monthly_drawdown.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    turnover_by_year.to_csv(
+        output_dir / "rebalance_turnover_by_year.csv",
         index=False,
         encoding="utf-8-sig",
     )
@@ -320,6 +381,9 @@ def _save_experiment_outputs(
             "is_reference": experiment["is_reference"],
             "raw_weights": experiment["weights"],
             "effective_weights": _effective_weights(score),
+            "selection": experiment.get("selection", {"method": "top_n"}),
+            "cost_multiplier": experiment.get("cost_multiplier", 1.0),
+            "cost_config": cost_config,
             "notes": experiment["notes"],
             "data_start": config["data"]["start_date"],
             "data_end": config["data"]["end_date"],
@@ -352,6 +416,10 @@ def _write_comparison_markdown(summary: pd.DataFrame, output_dir: Path) -> None:
         "turnover",
         "csi500_annual_excess_return",
         "csi500_information_ratio",
+        "top_n",
+        "avg_target_weight_turnover",
+        "avg_name_retention",
+        "worst_month_return",
         "avg_exposure_value",
         "avg_exposure_lowvol",
         "avg_exposure_reversal",
@@ -369,6 +437,9 @@ def _write_comparison_markdown(summary: pd.DataFrame, output_dir: Path) -> None:
         "max_drawdown",
         "turnover",
         "csi500_annual_excess_return",
+        "avg_target_weight_turnover",
+        "avg_name_retention",
+        "worst_month_return",
     }
     for row in summary[available].itertuples(index=False, name=None):
         cells = []
@@ -421,15 +492,30 @@ def main():
         output_dir = experiment_root / experiment_id
 
         score = calc_composite_score(factor_panel, experiment["weights"])
-        target_weights = _generate_experiment_weights(score, universe_by_date, config, trade_dates)
+        target_weights = _generate_experiment_weights(
+            score,
+            universe_by_date,
+            config,
+            trade_dates,
+            selection_config=experiment.get("selection"),
+        )
         if target_weights.empty:
             logger.warning("No target weights generated for %s", experiment_id)
             continue
 
-        results = _run_backtest(config, price_panel, target_weights, trade_dates)
+        cost_multiplier = float(experiment.get("cost_multiplier", 1.0))
+        cost_config = scale_cost_config(config["cost"], cost_multiplier)
+        results = _run_backtest(config, price_panel, target_weights, trade_dates, cost_config)
         metrics = calc_performance(results["nav"], results["trades"], benchmarks=benchmarks)
         exposure = calc_portfolio_factor_exposure(target_weights, FACTOR_NAMES)
         exposure_summary = summarize_portfolio_factor_exposure(exposure)
+        turnover = calc_rebalance_turnover(target_weights)
+        turnover_summary = summarize_rebalance_turnover(turnover)
+        annual_returns = calc_annual_return_diagnostics(results["nav"])
+        annual_return_summary = summarize_annual_return_diagnostics(annual_returns)
+        monthly_drawdown = calc_monthly_drawdown_diagnostics(results["nav"])
+        monthly_drawdown_summary = summarize_monthly_drawdown_diagnostics(monthly_drawdown)
+        turnover_by_year = summarize_rebalance_turnover_by_year(turnover)
 
         _save_experiment_outputs(
             experiment,
@@ -441,15 +527,30 @@ def main():
             metrics,
             exposure,
             exposure_summary,
+            turnover,
+            turnover_summary,
+            annual_returns,
+            monthly_drawdown,
+            turnover_by_year,
             filter_stats,
             factor_summary_source,
+            cost_config,
         )
 
+        selection = experiment.get("selection", {"method": "top_n"})
         summary_records.append({
             "experiment_id": experiment_id,
             "is_reference": experiment["is_reference"],
+            "selection_method": selection.get("method", "top_n"),
+            "top_n": selection.get("top_n", config["strategy"]["portfolio"].get("top_n", 50)),
+            "entry_rank": selection.get("entry_rank"),
+            "exit_rank": selection.get("exit_rank"),
+            "cost_multiplier": cost_multiplier,
             **flatten_performance_metrics(metrics),
             **exposure_summary,
+            **turnover_summary,
+            **annual_return_summary,
+            **monthly_drawdown_summary,
         })
 
     summary = pd.DataFrame(summary_records)

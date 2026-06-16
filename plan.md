@@ -1436,3 +1436,256 @@ results/factor_report_rebalance_universe/
 2. 优先对 `reversal + growth`、`reversal + lowvol`、`reversal + value` 做小规模消融实验，比较收益是否来自 `reversal` 单因子还是组合相关结构。
 3. 对 `baseline_v1_value_lowvol_reversal` 做缓冲带或换手约束实验时，要额外观察 `value/lowvol` 的逐期 payoff 是否改善，而不是只看组合总收益。
 4. 后续报告可增加 payoff by year 和极端月份归因，把 `value`、`lowvol` 的负尾部月份单独列出。
+
+---
+
+## 17. 执行进度记录（2026-06-16，`reversal` 相关小规模消融实验）
+
+本轮按上一节“优先对 `reversal + growth`、`reversal + lowvol`、`reversal + value` 做小规模消融实验”的建议推进，并补充了 `reversal_only` 作为必要对照：
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `make_equal_factor_weights`，用于稳定构造单因子/双因子等权实验权重。
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_reversal_ablation_experiments`，统一定义四组消融实验：
+  - `baseline_v1_reversal_only`
+  - `baseline_v1_reversal_growth`
+  - `baseline_v1_reversal_lowvol`
+  - `baseline_v1_reversal_value`
+- `scripts/07_run_weight_experiments.py` 已把上述四组实验追加进现有权重实验 runner，继续统一输出到 `results/experiments/weight_baselines/`。
+- `tests/test_weight_experiments.py` 新增测试，锁定四组消融实验的名称和等权权重。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_reversal_only/
+  baseline_v1_reversal_growth/
+  baseline_v1_reversal_lowvol/
+  baseline_v1_reversal_value/
+  summary.csv
+  comparison.md
+```
+
+验证结果：
+
+- `pytest -q`：`35 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新 `results/experiments/weight_baselines/summary.csv` 和 `comparison.md`。
+
+核心消融实验结果：
+
+| 实验 | 最终净值 | 年化收益 | 最大回撤 | 平均换手 | 中证500年化超额 | 中证500 IR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline_v0_current_weights | 2.2333 | 10.99% | -33.19% | 37.36% | 8.64% | 0.68 |
+| baseline_v1_reversal_only | 3.0354 | 15.50% | -36.91% | 84.17% | 13.06% | 1.09 |
+| baseline_v1_reversal_growth | 4.4082 | 21.23% | -35.42% | 63.49% | 18.66% | 1.53 |
+| baseline_v1_reversal_lowvol | 2.0534 | 9.79% | -34.74% | 65.92% | 7.47% | 0.60 |
+| baseline_v1_reversal_value | 2.3916 | 11.98% | -34.50% | 63.03% | 9.61% | 0.81 |
+
+新增发现：
+
+- `reversal_only` 明显强于当前主线收益和超额表现，但最大回撤更深、平均换手升至 84.17%，不能直接作为低成本主线替代。
+- `reversal + growth` 是本轮最强组合，最终净值 `4.4082`、年化收益 `21.23%`、中证 500 信息比率 `1.53`，且换手低于 `reversal_only`。这说明 `growth` 可能不只是弱观察因子，在与 `reversal` 组合后可能提供了有效互补结构。
+- `reversal + value` 略强于当前主线，最终净值 `2.3916`、年化收益 `11.98%`、中证 500 信息比率 `0.81`，但换手明显升高，暂时更适合作为候选实验而不是主线替换。
+- `reversal + lowvol` 未超过当前主线，且换手升至 65.92%。结合此前 `lowvol` 的 payoff 冲突，短期不应把它作为尾部收益核心因子。
+- 本轮结果进一步确认：`reversal` 是当前最值得围绕构建的核心因子，但直接放大 `reversal` 暴露会带来更高换手和更深回撤，需要先做交易约束与成本压力测试。
+
+下一步建议更新：
+
+1. 暂不替换当前主线权重；保留 `baseline_v0_current_weights` 作为正式对照基线。
+2. 优先围绕 `baseline_v1_reversal_growth` 做交易成本压力测试、换手约束和缓冲带实验，判断高收益是否能在更真实交易强度下保留。
+3. 增加 `growth_only` 对照实验，确认 `reversal + growth` 的收益提升来自组合互补，而不是单纯由 `growth` 暴露驱动。
+4. 暂缓 `reversal + lowvol` 主线化；`lowvol` 继续保留在 `rank_ic_group_return_conflict_review` 观察池中。
+5. 后续报告增加 payoff by year 和极端月份归因，重点解释 `reversal_growth` 的收益来源、回撤月份和换手来源。
+
+---
+
+## 18. 执行进度记录（2026-06-16，`growth_only` 对照与 `reversal_growth` 成本压力测试）
+
+本轮按上一节建议继续推进，补齐 `growth_only` 对照，并围绕 `baseline_v1_reversal_growth` 做第一版交易成本压力测试：
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_reversal_growth_validation_experiments`，统一定义：
+  - `baseline_v1_growth_only`
+  - `baseline_v1_reversal_growth_cost_2x`
+  - `baseline_v1_reversal_growth_cost_3x`
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `scale_cost_config`，只按倍率放大 `commission_rate`、`stamp_tax_rate`、`exchange_fee_rate` 和 `slippage_rate`，不改变 `lot_size` 与流动性约束。
+- `scripts/07_run_weight_experiments.py` 支持实验级 `cost_multiplier`，并在 `summary.csv` 与各实验 `experiment_manifest.json` 中记录成本倍率和实际成本配置。
+- `tests/test_weight_experiments.py` 新增测试，覆盖 `growth_only`、成本压力实验定义和成本配置缩放行为。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_growth_only/
+  baseline_v1_reversal_growth_cost_2x/
+  baseline_v1_reversal_growth_cost_3x/
+  summary.csv
+  comparison.md
+```
+
+验证结果：
+
+- `pytest -q`：`37 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新 `results/experiments/weight_baselines/summary.csv`、`comparison.md` 和各实验 `experiment_manifest.json`。
+
+核心结果：
+
+| 实验 | 成本倍率 | 最终净值 | 年化收益 | 最大回撤 | 平均换手 | 中证500年化超额 | 中证500 IR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline_v0_current_weights | 1.0x | 2.2333 | 10.99% | -33.19% | 37.36% | 8.64% | 0.68 |
+| baseline_v1_reversal_only | 1.0x | 3.0354 | 15.50% | -36.91% | 84.17% | 13.06% | 1.09 |
+| baseline_v1_growth_only | 1.0x | 3.5061 | 17.68% | -47.88% | 18.49% | 15.19% | 1.29 |
+| baseline_v1_reversal_growth | 1.0x | 4.4082 | 21.23% | -35.42% | 63.49% | 18.66% | 1.53 |
+| baseline_v1_reversal_growth_cost_2x | 2.0x | 3.8870 | 19.26% | -37.97% | 63.57% | 16.74% | 1.39 |
+| baseline_v1_reversal_growth_cost_3x | 3.0x | 3.4295 | 17.34% | -40.09% | 63.62% | 14.86% | 1.25 |
+
+新增发现：
+
+- `growth_only` 并不是弱对照，年化收益达到 `17.68%`、中证 500 IR 为 `1.29`，但最大回撤达到 `-47.88%`，风险形态明显差于 `reversal_growth`。
+- `reversal + growth` 的表现不是单纯由 `growth` 暴露驱动：组合最终净值、年化收益和最大回撤均优于 `growth_only`，也优于 `reversal_only`，说明两者存在有效互补。
+- `reversal_growth` 对交易成本有一定韧性。即使成本整体放大到 2x，年化收益仍为 `19.26%`、中证 500 IR 为 `1.39`；放大到 3x 后年化收益仍为 `17.34%`、IR 为 `1.25`，仍显著高于当前主线。
+- 成本压力下的主要问题是回撤加深：`reversal_growth` 最大回撤从 `-35.42%` 扩大到 2x 成本下 `-37.97%`、3x 成本下 `-40.09%`。高换手策略在压力成本下仍能保留收益，但回撤和资金曲线稳定性需要继续约束。
+- `growth_only` 平均换手只有 `18.49%`，而 `reversal_growth` 约为 `63.49%`。组合收益提升伴随明显交易强度上升，后续必须做换手约束或缓冲带实验。
+
+下一步建议更新：
+
+1. 继续保留 `baseline_v0_current_weights` 作为正式对照基线；`baseline_v1_reversal_growth` 暂列为最强候选实验，而不是直接替换主线。
+2. 优先给 `baseline_v1_reversal_growth` 增加缓冲带或持仓保留机制，目标是在保留大部分收益的同时降低 `63%+` 的月度平均换手。
+3. 增加成本压力下的分年收益、回撤月份和换手来源拆解，判断 2x/3x 成本损耗集中在哪些年份或行情阶段。
+4. 继续补充 payoff by year 和极端月份归因，重点解释 `growth_only` 的深回撤来源，以及 `reversal` 如何改善组合回撤。
+
+---
+
+## 19. 执行进度记录（2026-06-16，`reversal_growth` 缓冲带与持仓保留实验）
+
+本轮按上一节建议继续推进，围绕 `baseline_v1_reversal_growth` 增加第一版缓冲带/持仓保留机制，并把目标持仓层面的换手与留存率纳入实验产物：
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_rank_buffered_signal`，支持“TopN 买入、Exit Rank 卖出”的 rank buffer 选股逻辑：
+  - 无历史持仓时仍按 Top50 选股。
+  - 有历史持仓时，旧持仓只要仍在 `exit_rank` 内就优先保留。
+  - 保留后再用 `entry_rank` 内的新股票补足目标持仓数。
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_reversal_growth_turnover_control_experiments`，统一定义两组缓冲带实验：
+  - `baseline_v1_reversal_growth_buffer_80`
+  - `baseline_v1_reversal_growth_buffer_100`
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `calc_rebalance_turnover` 和 `summarize_rebalance_turnover`，用于输出每期目标持仓层面的理论换手、持仓留存率、买入数量和卖出数量。
+- `scripts/07_run_weight_experiments.py` 接入实验级 `selection` 配置，支持在同一套 runner 中同时跑普通 TopN、成本压力和 rank buffer 实验；各实验 manifest 中记录 `selection`。
+- `tests/test_weight_experiments.py` 扩展测试，覆盖缓冲带实验定义、rank buffer 选股行为、行业字段保留和目标持仓换手统计。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_reversal_growth_buffer_80/
+    rebalance_turnover.csv
+    rebalance_turnover_summary.csv
+    experiment_manifest.json
+  baseline_v1_reversal_growth_buffer_100/
+    rebalance_turnover.csv
+    rebalance_turnover_summary.csv
+    experiment_manifest.json
+  summary.csv
+  comparison.md
+```
+
+验证结果：
+
+- `pytest -q tests/test_weight_experiments.py`：`9 passed`。
+- `pytest -q`：`41 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新 `results/experiments/weight_baselines/summary.csv`、`comparison.md` 和各实验目录产物。
+
+核心结果：
+
+| 实验 | 选择机制 | 最终净值 | 年化收益 | 最大回撤 | 回测平均换手 | 目标权重换手 | 持仓留存率 | 中证500年化超额 | 中证500 IR |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline_v0_current_weights | Top50 | 2.2333 | 10.99% | -33.19% | 37.36% | 35.87% | 64.13% | 8.64% | 0.68 |
+| baseline_v1_reversal_growth | Top50 | 4.4082 | 21.23% | -35.42% | 63.49% | 62.45% | 37.55% | 18.66% | 1.53 |
+| baseline_v1_reversal_growth_buffer_80 | Top50 / Top80 buffer | 4.6049 | 21.92% | -35.25% | 52.65% | 50.83% | 49.17% | 19.34% | 1.55 |
+| baseline_v1_reversal_growth_buffer_100 | Top50 / Top100 buffer | 4.3139 | 20.89% | -38.70% | 46.53% | 44.32% | 55.68% | 18.33% | 1.45 |
+
+新增发现：
+
+- `Top50 / Top80 buffer` 是当前更优的第一版换手控制候选：回测平均换手从 `63.49%` 降至 `52.65%`，目标权重换手从 `62.45%` 降至 `50.83%`，同时最终净值、年化收益、最大回撤和中证 500 IR 均小幅优于无缓冲的 `reversal_growth`。
+- `Top50 / Top100 buffer` 进一步把回测平均换手降至 `46.53%`、持仓留存率升至 `55.68%`，但最大回撤加深至 `-38.70%`，说明过宽缓冲会保留更多已经明显降分的旧持仓，可能牺牲风险控制。
+- 缓冲带结果说明 `reversal_growth` 的收益并不完全依赖极端换手；适度持仓保留反而可能减少噪声交易，改善净值路径。
+- 目标权重换手与回测交易换手方向一致，可作为后续快速筛选换手控制方案的轻量诊断指标。
+- 当前最佳候选从“无缓冲 `baseline_v1_reversal_growth`”更新为“`baseline_v1_reversal_growth_buffer_80`”，但仍需继续做成本压力、分年收益、回撤月份和极端月份归因后再判断能否进入主线。
+
+下一步建议更新：
+
+1. 对 `baseline_v1_reversal_growth_buffer_80` 继续做 2x/3x 成本压力测试，确认适度缓冲后的收益韧性是否仍优于无缓冲版本。
+2. 增加 `Top60 / Top90`、`Top50 / Top70` 或最大单期换手上限实验，寻找收益、回撤与换手之间更平滑的折中点。
+3. 增加分年收益、回撤月份和换手来源拆解，重点比较无缓冲、Top80 buffer、Top100 buffer 在 2018、2022、2023 等压力年份的差异。
+4. 暂不替换正式主线权重；继续保留 `baseline_v0_current_weights` 作为审计基线，将 `baseline_v1_reversal_growth_buffer_80` 标记为当前最强候选实验。
+
+---
+
+## 20. 执行进度记录（2026-06-16，缓冲带成本压力与参数敏感性实验）
+
+本轮按上一节建议继续推进，围绕 `baseline_v1_reversal_growth_buffer_80` 补充成本压力测试，并增加更窄/更宽持仓缓冲参数实验，同时把分年收益、月度回撤和分年换手拆解纳入每个实验目录：
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 扩展 `build_reversal_growth_turnover_control_experiments`，新增：
+  - `baseline_v1_reversal_growth_buffer_70`
+  - `baseline_v1_reversal_growth_top60_buffer_90`
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_reversal_growth_buffer_cost_experiments`，统一定义：
+  - `baseline_v1_reversal_growth_buffer_80_cost_2x`
+  - `baseline_v1_reversal_growth_buffer_80_cost_3x`
+- `scripts/07_run_weight_experiments.py` 支持实验级 `selection.top_n`，因此 `Top60 / Top90` 会真实生成 60 只目标持仓，而不是被全局 `top_n=50` 截断。
+- `scripts/07_run_weight_experiments.py` 为每个实验新增诊断产物：
+  - `annual_returns.csv`
+  - `monthly_drawdown.csv`
+  - `rebalance_turnover_by_year.csv`
+- `results/experiments/weight_baselines/summary.csv` 和 `comparison.md` 新增 `top_n`、`worst_month_return`、`min_annual_return`、`negative_year_count` 等摘要字段，便于后续比较压力年份和极端月份。
+- `tests/test_weight_experiments.py` 扩展测试，覆盖新增实验定义、`buffer_80` 成本压力定义、分年收益、月度回撤和分年换手拆解。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_reversal_growth_buffer_70/
+  baseline_v1_reversal_growth_top60_buffer_90/
+  baseline_v1_reversal_growth_buffer_80_cost_2x/
+  baseline_v1_reversal_growth_buffer_80_cost_3x/
+  summary.csv
+  comparison.md
+```
+
+各实验目录新增：
+
+```text
+annual_returns.csv
+monthly_drawdown.csv
+rebalance_turnover_by_year.csv
+```
+
+验证结果：
+
+- `pytest -q tests/test_weight_experiments.py`：`11 passed`。
+- `pytest -q`：`43 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新 `results/experiments/weight_baselines/summary.csv`、`comparison.md` 和各实验目录产物。
+
+核心结果：
+
+| 实验 | 选择机制 | 成本倍率 | 最终净值 | 年化收益 | 最大回撤 | 回测平均换手 | 目标权重换手 | 持仓留存率 | 中证500年化超额 | 中证500 IR |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline_v0_current_weights | Top50 | 1.0x | 2.2333 | 10.99% | -33.19% | 37.36% | 35.87% | 64.13% | 8.64% | 0.68 |
+| baseline_v1_reversal_growth | Top50 | 1.0x | 4.4082 | 21.23% | -35.42% | 63.49% | 62.45% | 37.55% | 18.66% | 1.53 |
+| baseline_v1_reversal_growth_buffer_70 | Top50 / Top70 buffer | 1.0x | 4.3456 | 21.00% | -35.64% | 55.92% | 54.38% | 45.62% | 18.44% | 1.51 |
+| baseline_v1_reversal_growth_buffer_80 | Top50 / Top80 buffer | 1.0x | 4.6049 | 21.92% | -35.25% | 52.65% | 50.83% | 49.17% | 19.34% | 1.55 |
+| baseline_v1_reversal_growth_buffer_80_cost_2x | Top50 / Top80 buffer | 2.0x | 4.1088 | 20.13% | -37.24% | 52.66% | 50.83% | 49.17% | 17.59% | 1.43 |
+| baseline_v1_reversal_growth_buffer_80_cost_3x | Top50 / Top80 buffer | 3.0x | 3.7039 | 18.52% | -38.91% | 52.71% | 50.83% | 49.17% | 16.01% | 1.31 |
+| baseline_v1_reversal_growth_buffer_100 | Top50 / Top100 buffer | 1.0x | 4.3139 | 20.89% | -38.70% | 46.53% | 44.32% | 55.68% | 18.33% | 1.45 |
+| baseline_v1_reversal_growth_top60_buffer_90 | Top60 / Top90 buffer | 1.0x | 4.6118 | 21.94% | -34.30% | 52.86% | 51.22% | 48.78% | 19.36% | 1.69 |
+
+新增发现：
+
+- `Top50 / Top80 buffer` 在成本压力下仍保持明显韧性：2x 成本年化收益 `20.13%`、中证 500 IR `1.43`；3x 成本年化收益 `18.52%`、IR `1.31`，仍显著高于 `baseline_v0_current_weights`。
+- 与无缓冲 `reversal_growth` 的 3x 成本版本相比，`Top50 / Top80 buffer` 的 3x 成本结果更好：年化收益 `18.52%` 高于 `17.34%`，最大回撤 `-38.91%` 也浅于 `-40.09%`。这说明适度缓冲不只是降低换手，也改善了成本压力下的净值路径。
+- `Top50 / Top70 buffer` 相比 `Top50 / Top80 buffer` 没有更优：换手更高、收益更低，说明缓冲过窄时持仓保留不足。
+- `Top50 / Top100 buffer` 虽然进一步降换手，但最大回撤明显加深至 `-38.70%`，延续了上一轮“过宽缓冲牺牲风险控制”的判断。
+- `Top60 / Top90 buffer` 成为当前最强候选：最终净值 `4.6118`、年化收益 `21.94%`、最大回撤 `-34.30%`、中证 500 IR `1.69`，在收益、回撤和 IR 上均略优于 `Top50 / Top80 buffer`，但它改变了持仓数量，需要继续做成本压力和参数邻域验证。
+- 新增分年收益和月度回撤产物显示，`Top50 / Top80 buffer` 仍主要在 2018、2022、2023 出现年度负收益；后续应重点比较这些年份中不同缓冲带的回撤来源和换手来源。
+
+下一步建议更新：
+
+1. 将当前最强候选从 `baseline_v1_reversal_growth_buffer_80` 更新为 `baseline_v1_reversal_growth_top60_buffer_90`，但仍不替换正式主线。
+2. 对 `baseline_v1_reversal_growth_top60_buffer_90` 做 2x/3x 成本压力测试，确认它的优势不是来自更高持仓数在 1x 成本下的偶然改善。
+3. 增加 `Top60 / Top80`、`Top60 / Top100`、`Top70 / Top100` 等邻域实验，判断最优点是否稳定在 60 只持仓附近。
+4. 基于新增 `annual_returns.csv`、`monthly_drawdown.csv` 和 `rebalance_turnover_by_year.csv`，下一轮重点做 2018、2022、2023 压力年份拆解，比较无缓冲、Top50/80、Top60/90 的收益损失、回撤月份和换手来源。
+5. 继续保留 `baseline_v0_current_weights` 作为审计基线，所有候选仍需等数据偏差、行业约束和更真实交易约束继续修复后再决定是否主线化。
