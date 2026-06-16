@@ -43,17 +43,29 @@ def build_industry_asof(
         "index_name": "industry_name",
         "con_code": "ts_code",
     })
+    df["in_date"] = df["in_date"].astype(str)
+    if "out_date" in df.columns:
+        df["out_date"] = df["out_date"].astype("string")
+    df = df.sort_values(["ts_code", "in_date"])
 
     result = []
 
     for trade_date in trade_dates:
         avail = df[df["in_date"] <= trade_date].copy()
+        if "out_date" in avail.columns:
+            out_date = avail["out_date"]
+            active_mask = out_date.isna() | (out_date == "") | (out_date > trade_date)
+            avail = avail[active_mask]
         avail = avail[avail["ts_code"].notna()]
         latest = avail.groupby("ts_code").tail(1)
         latest = latest.copy()
         latest["trade_date"] = trade_date
         result.append(latest)
 
-    out = pd.concat(result, ignore_index=True)
+    if result:
+        out = pd.concat(result, ignore_index=True)
+    else:
+        out = df.head(0).copy()
+        out["trade_date"] = []
     logger.info("Industry as-of built: %d rows", len(out))
     return out

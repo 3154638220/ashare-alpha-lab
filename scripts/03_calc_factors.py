@@ -93,6 +93,13 @@ def main():
     factors = factors.merge(lowvol_df, on=["ts_code", "trade_date"], how="outer")
     factors = factors.merge(mom_df, on=["ts_code", "trade_date"], how="outer")
 
+    industry_cols = [c for c in ["industry_code", "industry_name"] if c in price_panel.columns]
+    if industry_cols:
+        industry_meta = price_panel[["ts_code", "trade_date"] + industry_cols].drop_duplicates(
+            ["ts_code", "trade_date"]
+        )
+        factors = factors.merge(industry_meta, on=["ts_code", "trade_date"], how="left")
+
     factor_panel_path = Path(factor_dir) / "factor_panel.parquet"
     factors.to_parquet(factor_panel_path, index=False)
     logger.info("Saved factor_panel to %s (%d rows)", factor_panel_path, len(factors))

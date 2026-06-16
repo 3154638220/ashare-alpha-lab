@@ -12,11 +12,17 @@ def generate_target_weights(
 
     df = signal.copy()
 
+    if df.empty:
+        return df
+
     if "rank" not in df.columns:
         df = df.sort_values("score", ascending=False)
         df["rank"] = range(1, len(df) + 1)
 
     df = df.head(top_n)
+
+    if df.empty:
+        return df
 
     weighting = portfolio_cfg.get("weighting", "equal_weight")
     if weighting == "equal_weight":

@@ -10,6 +10,7 @@ from ashare_alpha.settings import load_config
 from ashare_alpha.logger import init_logger, logger
 from ashare_alpha.analysis.metrics import calc_performance, save_metrics, align_nav_with_benchmark
 from ashare_alpha.analysis.factor_ic import calc_factor_ic_summary
+from ashare_alpha.analysis.factor_report import generate_factor_diagnostics_report
 from ashare_alpha.analysis.attribution import calc_industry_exposure
 from ashare_alpha.visualize.report import generate_report
 from ashare_alpha.data.loader import load_panel, load_factor_score, load_raw
@@ -76,6 +77,35 @@ def _save_excess_nav(nav: pd.DataFrame, benchmarks: dict[str, pd.DataFrame], res
     logger.info("Saved excess NAV to %s", path)
 
 
+def _save_universe_filter_summary(signal_dir: str, result_dir: str) -> None:
+    stats_path = Path(signal_dir) / "universe_filter_stats.csv"
+    if not stats_path.exists():
+        logger.info("No universe filter stats found at %s", stats_path)
+        return
+
+    stats = pd.read_csv(stats_path)
+    if stats.empty:
+        logger.info("Universe filter stats are empty")
+        return
+
+    summary = (
+        stats.groupby("filter", sort=False)
+        .agg(
+            rebalance_dates=("trade_date", "nunique"),
+            avg_before=("before", "mean"),
+            avg_after=("after", "mean"),
+            avg_removed=("removed", "mean"),
+            max_removed=("removed", "max"),
+            total_removed=("removed", "sum"),
+        )
+        .reset_index()
+    )
+
+    path = Path(result_dir) / "universe_filter_stats_summary.csv"
+    summary.to_csv(path, index=False, encoding="utf-8-sig")
+    logger.info("Saved universe filter summary to %s", path)
+
+
 def main():
     config = load_config()
     init_logger(log_file="logs/report.log")
@@ -83,6 +113,7 @@ def main():
     result_dir = config["backtest"]["output"]["result_dir"]
     processed_dir = config["data"]["processed_dir"]
     factor_dir = config["data"]["factor_dir"]
+    signal_dir = config["data"]["signal_dir"]
 
     logger.info("Loading results ...")
     nav = pd.read_csv(Path(result_dir) / "nav.csv")
@@ -99,6 +130,7 @@ def main():
     save_metrics(metrics, str(Path(result_dir) / "metrics.json"))
     logger.info("Saved metrics to %s", Path(result_dir) / "metrics.json")
     _save_excess_nav(nav, benchmarks, result_dir)
+    _save_universe_filter_summary(signal_dir, result_dir)
 
     try:
         price_panel = load_panel("price_panel", processed_dir)
@@ -111,6 +143,33 @@ def main():
         with open(ic_path, "w", encoding="utf-8") as f:
             json.dump(ic_summary, f, indent=2, default=str)
         logger.info("Saved factor IC to %s", ic_path)
+
+        factor_report_dir = Path(result_dir) / "factor_report"
+        generate_factor_diagnostics_report(
+            factor_scores,
+            price_panel,
+            output_dir=factor_report_dir,
+            factor_names=factor_names,
+        )
+        logger.info("Saved factor diagnostics report to %s", factor_report_dir)
+
+        rebalance_universe_path = Path(signal_dir) / "rebalance_universe.parquet"
+        if rebalance_universe_path.exists():
+            rebalance_universe = pd.read_parquet(rebalance_universe_path)
+            rebalance_factor_report_dir = Path(result_dir) / "factor_report_rebalance_universe"
+            generate_factor_diagnostics_report(
+                factor_scores,
+                price_panel,
+                output_dir=rebalance_factor_report_dir,
+                factor_names=factor_names,
+                eligible_universe=rebalance_universe,
+            )
+            logger.info(
+                "Saved rebalance-universe factor diagnostics report to %s",
+                rebalance_factor_report_dir,
+            )
+        else:
+            logger.info("No rebalance universe found at %s", rebalance_universe_path)
 
     except Exception as e:
         logger.warning("Could not calculate factor IC: %s", e)

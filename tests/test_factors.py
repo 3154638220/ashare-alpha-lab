@@ -77,3 +77,28 @@ def test_composite_score():
 
     assert "score" in result.columns
     assert len(result) == 2
+
+
+def test_composite_score_renormalizes_available_factor_weights():
+    import pandas as pd
+    import pytest
+    from ashare_alpha.factors.composite import calc_composite_score
+
+    df = pd.DataFrame({
+        "ts_code": ["A"],
+        "trade_date": ["20200101"],
+        "industry_code": ["I1"],
+        "industry_name": ["Ind 1"],
+        "value": [1.0],
+        "quality": [3.0],
+    })
+    weights = {"value": 0.25, "quality": 0.25, "leverage": 0.50}
+
+    with pytest.warns(RuntimeWarning):
+        result = calc_composite_score(df, weights)
+
+    assert result.iloc[0]["score"] == 2.0
+    assert result.iloc[0]["weight_value"] == 0.5
+    assert result.iloc[0]["weight_quality"] == 0.5
+    assert result.iloc[0]["factor_count"] == 2
+    assert result.iloc[0]["industry_code"] == "I1"

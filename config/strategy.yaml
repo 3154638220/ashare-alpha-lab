@@ -37,5 +37,5 @@ strategy:
     top_n: 50
     weighting: "equal_weight"
     max_stock_weight: 0.02
-    max_industry_weight: 0.20
+    max_industry_weight: null
     min_stock_weight: 0.005

@@ -16,6 +16,19 @@ from ashare_alpha.strategy.portfolio import generate_target_weights
 from ashare_alpha.strategy.constraints import apply_position_constraints
 
 
+def _load_optional_stock_status(processed_dir: str, raw_dir: str) -> pd.DataFrame | None:
+    for data_dir, name, loader in [
+        (processed_dir, "stock_status_panel", load_panel),
+        (raw_dir, "stock_status", load_raw),
+    ]:
+        path = Path(data_dir) / f"{name}.parquet"
+        if path.exists():
+            logger.info("Loading optional stock status from %s", path)
+            return loader(name, data_dir)
+    logger.info("No historical stock status panel found; using current-name ST fallback")
+    return None
+
+
 def main():
     config = load_config()
     init_logger(log_file="logs/signals.log")
@@ -30,6 +43,7 @@ def main():
     price_panel = load_panel("price_panel", processed_dir)
     factor_scores = load_factor_score(factor_dir)
     stock_basic = load_raw("stock_basic", raw_dir)
+    stock_status = _load_optional_stock_status(processed_dir, raw_dir)
 
     cal = load_raw("trade_calendar", raw_dir)
     trade_dates = get_trade_dates(cal)
@@ -38,6 +52,8 @@ def main():
     logger.info("Rebalance dates: %d", len(rebalance_dates))
 
     all_weights = []
+    all_filter_stats = []
+    all_universes = []
 
     for trade_date in tqdm(rebalance_dates, desc="Generating signals"):
         try:
@@ -49,9 +65,25 @@ def main():
             if date_scores.empty:
                 continue
 
-            universe = build_universe(
-                trade_date, price_panel, price_panel, stock_basic, config
+            universe, filter_stats = build_universe(
+                trade_date,
+                price_panel,
+                price_panel,
+                stock_basic,
+                config,
+                stock_status=stock_status,
+                return_filter_stats=True,
             )
+            all_filter_stats.append(filter_stats)
+            if not universe.empty:
+                universe_cols = [
+                    c
+                    for c in ["ts_code", "trade_date", "industry_code", "industry_name"]
+                    if c in universe.columns
+                ]
+                universe_snapshot = universe[universe_cols].copy()
+                universe_snapshot["rebalance_date"] = trade_date
+                all_universes.append(universe_snapshot)
 
             if universe.empty:
                 logger.warning("Empty universe for %s", trade_date)
@@ -84,6 +116,24 @@ def main():
         logger.info("Saved target_weights to %s (%d rows)", weight_path, len(result))
     else:
         logger.warning("No target weights generated.")
+
+    if all_filter_stats:
+        filter_stats = pd.concat(all_filter_stats, ignore_index=True)
+        stats_path = Path(signal_dir) / "universe_filter_stats.csv"
+        filter_stats.to_csv(stats_path, index=False, encoding="utf-8-sig")
+        logger.info("Saved universe filter stats to %s (%d rows)", stats_path, len(filter_stats))
+
+    if all_universes:
+        rebalance_universe = pd.concat(all_universes, ignore_index=True).drop_duplicates(
+            ["ts_code", "trade_date", "rebalance_date"]
+        )
+        universe_path = Path(signal_dir) / "rebalance_universe.parquet"
+        rebalance_universe.to_parquet(universe_path, index=False)
+        logger.info(
+            "Saved rebalance universe to %s (%d rows)",
+            universe_path,
+            len(rebalance_universe),
+        )
 
     logger.info("Signal generation complete.")
 

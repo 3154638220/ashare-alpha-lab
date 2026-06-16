@@ -54,3 +54,36 @@ def test_asof_basic_functionality():
 
     rows_0101 = result[result["trade_date"] == "20200120"]
     assert len(rows_0101) == 2
+
+
+def test_industry_asof_respects_out_date():
+    import pandas as pd
+    from ashare_alpha.data.asof import build_industry_asof
+
+    industry_member = pd.DataFrame({
+        "index_code": ["OLD", "NEW", "STAY"],
+        "index_name": ["Old Industry", "New Industry", "Stay Industry"],
+        "con_code": ["000001.SZ", "000001.SZ", "000002.SZ"],
+        "in_date": ["20200101", "20200301", "20200101"],
+        "out_date": ["20200301", None, None],
+    })
+    trade_dates = ["20200215", "20200301", "20200315"]
+
+    result = build_industry_asof(trade_dates, industry_member)
+
+    row_before = result[
+        (result["trade_date"] == "20200215")
+        & (result["ts_code"] == "000001.SZ")
+    ].iloc[0]
+    row_on_out_date = result[
+        (result["trade_date"] == "20200301")
+        & (result["ts_code"] == "000001.SZ")
+    ].iloc[0]
+    row_after = result[
+        (result["trade_date"] == "20200315")
+        & (result["ts_code"] == "000001.SZ")
+    ].iloc[0]
+
+    assert row_before["industry_code"] == "OLD"
+    assert row_on_out_date["industry_code"] == "NEW"
+    assert row_after["industry_code"] == "NEW"

@@ -14,10 +14,26 @@ def generate_signal(
     valid_codes = universe["ts_code"].unique()
     df = score[score["ts_code"].isin(valid_codes)].copy()
 
+    if df.empty:
+        return df
+
+    industry_cols = [c for c in ["industry_code", "industry_name"] if c in universe.columns]
+    if industry_cols:
+        industry_meta = universe[["ts_code"] + industry_cols].drop_duplicates("ts_code")
+        df = df.merge(industry_meta, on="ts_code", how="left", suffixes=("", "_universe"))
+        for col in industry_cols:
+            universe_col = f"{col}_universe"
+            if universe_col in df.columns:
+                df[col] = df[col].combine_first(df[universe_col])
+                df = df.drop(columns=[universe_col])
+
     df = df.sort_values("score", ascending=False)
     df["rank"] = range(1, len(df) + 1)
 
     df = df.head(top_n)
+
+    if df.empty:
+        return df
 
     weighting = portfolio_cfg.get("weighting", "equal_weight")
 
