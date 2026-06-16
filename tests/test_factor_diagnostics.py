@@ -24,6 +24,7 @@ def _make_factor_fixture():
             price_records.append({
                 "ts_code": ts_code,
                 "trade_date": trade_date,
+                "adj_open": 100.0 * (1.0 + stock_idx / 1000.0) ** date_idx,
                 "adj_close": 100.0 * (1.0 + stock_idx / 1000.0) ** date_idx,
             })
 
@@ -80,6 +81,10 @@ def test_generate_factor_diagnostics_report(tmp_path):
     assert (tmp_path / "summary.csv").exists()
     assert (tmp_path / "ic_by_year.csv").exists()
     assert (tmp_path / "group_returns.csv").exists()
+    assert (tmp_path / "payoff_by_date.csv").exists()
+    assert (tmp_path / "payoff_summary.csv").exists()
+    assert (tmp_path / "execution_payoff_by_date.csv").exists()
+    assert (tmp_path / "execution_payoff_summary.csv").exists()
     assert (tmp_path / "decay.csv").exists()
     assert (tmp_path / "coverage.csv").exists()
     assert (tmp_path / "value.md").exists()
@@ -90,7 +95,11 @@ def test_generate_factor_diagnostics_report(tmp_path):
 
     assert momentum["recommendation"] == "negative_ic_review_reverse_or_remove"
     assert value["long_short_mean_return"] > 0
+    assert value["payoff_mean_pearson_ic"] > 0
+    assert value["long_short_pos_ratio"] > 0
     assert outputs["coverage"]["coverage"].min() < 1.0
+    assert not outputs["payoff_by_date"].empty
+    assert not outputs["execution_payoff_summary"].empty
 
 
 def test_factor_diagnostics_can_limit_to_eligible_universe(tmp_path):

@@ -4,7 +4,13 @@ import numpy as np
 import pandas as pd
 
 from .factor_decay import calc_factor_decay
-from .factor_group import calc_factor_group_returns, summarize_factor_group_returns
+from .factor_group import (
+    calc_execution_payoff_by_date,
+    calc_factor_group_returns,
+    calc_factor_payoff_by_date,
+    summarize_factor_group_returns,
+    summarize_factor_payoff_by_date,
+)
 from .factor_ic import calc_factor_ic_summary, calc_ic_by_year
 
 
@@ -61,8 +67,10 @@ def _factor_recommendation(row: pd.Series) -> str:
 
     if pd.notna(mean_ic) and mean_ic < 0:
         return "negative_ic_review_reverse_or_remove"
-    if pd.notna(mean_ic) and abs(mean_ic) < 0.01 and pd.notna(pos_ic_ratio) and pos_ic_ratio < 0.5:
+    if pd.notna(mean_ic) and abs(mean_ic) < 0.01:
         return "weak_observe_or_downweight"
+    if pd.notna(mean_ic) and mean_ic > 0 and pd.notna(long_short) and long_short < 0:
+        return "rank_ic_group_return_conflict_review"
     if pd.notna(mean_ic) and mean_ic > 0.02 and pd.notna(long_short) and long_short > 0:
         return "positive_keep"
     if pd.notna(mean_ic) and mean_ic > 0:
@@ -77,6 +85,7 @@ def build_factor_summary(
     decay: pd.DataFrame,
     factor_names: list[str],
     base_horizon: int = 20,
+    payoff_summary: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     records = []
     coverage_summary = (
@@ -100,6 +109,11 @@ def build_factor_summary(
     decay_base = (
         decay[decay["horizon"] == base_horizon].set_index("factor")
         if not decay.empty
+        else pd.DataFrame()
+    )
+    payoff_by_factor = (
+        payoff_summary.set_index("factor")
+        if payoff_summary is not None and not payoff_summary.empty
         else pd.DataFrame()
     )
 
@@ -138,6 +152,20 @@ def build_factor_summary(
                 "decay_icir": float(dec["icir"]),
             })
 
+        if not payoff_by_factor.empty and factor_name in payoff_by_factor.index:
+            payoff = payoff_by_factor.loc[factor_name]
+            row.update({
+                "payoff_mean_pearson_ic": float(payoff["mean_pearson_ic"]),
+                "payoff_standardized_return": float(payoff["mean_standardized_payoff"]),
+                "long_short_pos_ratio": float(payoff["long_short_pos_ratio"]),
+                "rank_ic_long_short_sign_conflict_ratio": float(
+                    payoff["rank_ic_long_short_sign_conflict_ratio"]
+                ),
+                "return_weighted_rank_ic": float(payoff["return_weighted_rank_ic"]),
+                "worst_long_short_return": float(payoff["worst_long_short_return"]),
+                "best_long_short_return": float(payoff["best_long_short_return"]),
+            })
+
         row["recommendation"] = _factor_recommendation(pd.Series(row))
         records.append(row)
 
@@ -154,6 +182,10 @@ def _format_value(value) -> str:
 
 def _markdown_table(df: pd.DataFrame, columns: list[str]) -> str:
     if df.empty:
+        return "_No data._"
+
+    columns = [c for c in columns if c in df.columns]
+    if not columns:
         return "_No data._"
 
     view = df[columns].copy()
@@ -174,12 +206,18 @@ def _write_factor_markdown(
     group_summary: pd.DataFrame,
     decay: pd.DataFrame,
     coverage: pd.DataFrame,
+    payoff_summary: pd.DataFrame,
+    execution_payoff_summary: pd.DataFrame,
 ) -> None:
     summary_row = summary[summary["factor"] == factor_name]
     year_view = ic_by_year[ic_by_year["factor"] == factor_name].sort_values("year")
     group_view = group_summary[group_summary["factor"] == factor_name].sort_values("group", key=lambda s: s.astype(str))
     decay_view = decay[decay["factor"] == factor_name].sort_values("horizon")
     coverage_view = coverage[coverage["factor"] == factor_name]
+    payoff_view = payoff_summary[payoff_summary["factor"] == factor_name]
+    execution_payoff_view = execution_payoff_summary[
+        execution_payoff_summary["factor"] == factor_name
+    ]
 
     lines = [
         f"# Factor report: {factor_name}",
@@ -204,6 +242,46 @@ def _write_factor_markdown(
         "",
         "## Decay",
         _markdown_table(decay_view, ["horizon", "observations", "mean_ic", "icir", "pos_ic_ratio"]),
+        "",
+        "## Payoff diagnostics",
+        _markdown_table(
+            payoff_view,
+            [
+                "return_label",
+                "observations",
+                "mean_rank_ic",
+                "mean_pearson_ic",
+                "mean_standardized_payoff",
+                "mean_long_short_return",
+                "annualized_long_short_return",
+                "rank_ic_pos_ratio",
+                "long_short_pos_ratio",
+                "rank_ic_long_short_sign_conflict_ratio",
+                "return_weighted_rank_ic",
+                "worst_long_short_return",
+                "best_long_short_return",
+            ],
+        ),
+        "",
+        "## Execution payoff diagnostics",
+        _markdown_table(
+            execution_payoff_view,
+            [
+                "return_label",
+                "observations",
+                "mean_rank_ic",
+                "mean_pearson_ic",
+                "mean_standardized_payoff",
+                "mean_long_short_return",
+                "annualized_long_short_return",
+                "rank_ic_pos_ratio",
+                "long_short_pos_ratio",
+                "rank_ic_long_short_sign_conflict_ratio",
+                "return_weighted_rank_ic",
+                "worst_long_short_return",
+                "best_long_short_return",
+            ],
+        ),
         "",
         "## Coverage",
     ]
@@ -264,6 +342,34 @@ def generate_factor_diagnostics_report(
         group_returns,
         horizon=base_horizon,
     )
+    payoff_by_date = calc_factor_payoff_by_date(
+        factor_scores,
+        price,
+        factor_names=factor_names,
+        horizon=base_horizon,
+        n_groups=n_groups,
+    )
+    payoff_summary = summarize_factor_payoff_by_date(
+        payoff_by_date,
+        horizon=base_horizon,
+    )
+    if {"adj_open", "adj_close"}.issubset(price.columns):
+        execution_payoff_by_date = calc_execution_payoff_by_date(
+            factor_scores,
+            price,
+            factor_names=factor_names,
+            horizon=base_horizon,
+            signal_lag=1,
+            n_groups=n_groups,
+        )
+        execution_payoff_summary = summarize_factor_payoff_by_date(
+            execution_payoff_by_date,
+            horizon=base_horizon,
+        )
+    else:
+        execution_payoff_by_date = pd.DataFrame()
+        execution_payoff_summary = pd.DataFrame()
+
     decay = calc_factor_decay(
         factor_scores,
         price,
@@ -277,11 +383,24 @@ def generate_factor_diagnostics_report(
         decay,
         factor_names=factor_names,
         base_horizon=base_horizon,
+        payoff_summary=payoff_summary,
     )
 
     summary.to_csv(output_dir / "summary.csv", index=False, encoding="utf-8-sig")
     ic_by_year.to_csv(output_dir / "ic_by_year.csv", index=False, encoding="utf-8-sig")
     group_summary.to_csv(output_dir / "group_returns.csv", index=False, encoding="utf-8-sig")
+    payoff_by_date.to_csv(output_dir / "payoff_by_date.csv", index=False, encoding="utf-8-sig")
+    payoff_summary.to_csv(output_dir / "payoff_summary.csv", index=False, encoding="utf-8-sig")
+    execution_payoff_by_date.to_csv(
+        output_dir / "execution_payoff_by_date.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    execution_payoff_summary.to_csv(
+        output_dir / "execution_payoff_summary.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
     decay.to_csv(output_dir / "decay.csv", index=False, encoding="utf-8-sig")
     coverage.to_csv(output_dir / "coverage.csv", index=False, encoding="utf-8-sig")
 
@@ -294,12 +413,18 @@ def generate_factor_diagnostics_report(
             group_summary,
             decay,
             coverage,
+            payoff_summary,
+            execution_payoff_summary,
         )
 
     return {
         "summary": summary,
         "ic_by_year": ic_by_year,
         "group_returns": group_summary,
+        "payoff_by_date": payoff_by_date,
+        "payoff_summary": payoff_summary,
+        "execution_payoff_by_date": execution_payoff_by_date,
+        "execution_payoff_summary": execution_payoff_summary,
         "decay": decay,
         "coverage": coverage,
     }

@@ -1364,3 +1364,75 @@ results/experiments/weight_baselines/
 3. 对 `baseline_v1_value_lowvol_reversal` 做换手约束或缓冲带实验，判断收益下降是否能换来更低回撤和交易成本。
 4. 对 `baseline_v1_ic_weighted_static` 增加权重平滑、权重上限和换手惩罚，不宜直接采用当前静态 IC 权重。
 5. 后续实验汇总统一使用 `results/experiments/weight_baselines/summary.csv` 和各实验目录下的 `experiment_manifest.json` 做可追踪对比。
+
+---
+
+## 16. 执行进度记录（2026-06-16，排查 IC 与分组收益冲突并增强 payoff 诊断）
+
+本轮推进近期任务 5 的后续排查，重点复核 `value` 和 `lowvol` 的“RankIC 为正、分组多空收益为负”冲突：
+
+- `src/ashare_alpha/analysis/factor_ic.py` 新增通用 `calc_forward_return_from_prices`，支持指定起点价格、终点价格、起点 lag 和终点 lag；原 `calc_forward_return` 保持 close-to-close 兼容口径。
+- `src/ashare_alpha/analysis/factor_group.py` 新增逐期 payoff 诊断：
+  - 每个因子、每个调仓日输出 RankIC、Pearson IC、标准化线性 payoff、市场平均未来收益、收益离散度、五分组高低组收益和多空收益。
+  - 新增“次日开盘执行到后续收盘”的 execution payoff 口径，用于检查调仓执行价格是否解释冲突。
+  - 对常数序列相关系数增加保护，避免诊断过程产生无效相关性警告。
+- `src/ashare_alpha/analysis/factor_report.py` 接入 payoff 诊断，并将其写入单因子 markdown；综合 summary 中新增 Pearson、线性 payoff、多空胜率、收益幅度加权 RankIC 等字段。
+- `tests/test_factor_diagnostics.py` 扩展测试，覆盖新增 payoff 产物和 execution payoff 产物。
+
+新增输出：
+
+```text
+results/factor_report/
+  payoff_by_date.csv
+  payoff_summary.csv
+  execution_payoff_by_date.csv
+  execution_payoff_summary.csv
+
+results/factor_report_rebalance_universe/
+  payoff_by_date.csv
+  payoff_summary.csv
+  execution_payoff_by_date.csv
+  execution_payoff_summary.csv
+```
+
+验证结果：
+
+- `pytest -q`：`34 passed`。
+- 已重跑 `scripts/06_make_report.py`，刷新全样本和调仓股票池两套因子诊断报告。
+- 报告脚本仍有 Matplotlib 中文字体 glyph warning，来自本地绘图字体环境，不影响 CSV、metrics 和 markdown 产物。
+
+调仓股票池 close-to-close payoff 核心结果：
+
+| 因子 | Mean RankIC | Mean Pearson IC | 标准化 payoff | 多空 20日收益 | RankIC 正比例 | 多空正收益比例 | 收益幅度加权 RankIC | 当前判断 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| value | 0.0147 | -0.0096 | -0.0025 | -0.6820% | 50.53% | 47.37% | 0.0008 | RankIC 与尾部分组收益冲突 |
+| lowvol | 0.0403 | -0.0049 | -0.0024 | -0.8694% | 61.96% | 45.65% | 0.0003 | RankIC 与尾部分组收益冲突 |
+| reversal | 0.0357 | 0.0186 | 0.0016 | 0.5338% | 52.63% | 48.42% | 0.0727 | 当前最稳核心因子 |
+| growth | 0.0123 | 0.0160 | 0.0023 | 0.5701% | 52.17% | 56.52% | 0.0318 | 弱正，可观察 |
+| quality | 0.0004 | -0.0063 | -0.0015 | -0.3517% | 51.09% | 48.91% | -0.0319 | 弱因子，应降权观察 |
+| momentum | -0.0042 | 0.0050 | 0.0010 | 0.2371% | 50.56% | 53.93% | -0.0054 | RankIC 为负，仍不宜正向纳入 |
+
+调仓股票池 execution payoff 核心结果：
+
+| 因子 | Mean RankIC | Mean Pearson IC | 标准化 payoff | 多空 20日收益 | RankIC 正比例 | 多空正收益比例 | 收益幅度加权 RankIC |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| value | 0.0134 | -0.0089 | -0.0027 | -0.6947% | 53.68% | 47.37% | 0.0013 |
+| lowvol | 0.0339 | -0.0063 | -0.0029 | -1.0817% | 57.61% | 46.74% | -0.0138 |
+| reversal | 0.0382 | 0.0208 | 0.0017 | 0.5730% | 53.68% | 50.53% | 0.0810 |
+| growth | 0.0099 | 0.0159 | 0.0024 | 0.6041% | 53.26% | 56.52% | 0.0297 |
+
+新增发现：
+
+- `value` 和 `lowvol` 的冲突不是全交易日样本口径造成的，也不是次日开盘执行价单独造成的；在调仓股票池和 execution payoff 口径下仍然存在。
+- 更准确的解释是：RankIC 是逐期同权的秩相关，而五分组多空是尾部组合收益，受收益幅度、尾部月份和线性 payoff 影响更大。`value` 和 `lowvol` 的平均 RankIC 为正，但 Pearson IC、标准化 payoff 和尾部分组多空均为负，说明它们的正 RankIC 主要不是稳定可交易的 top-minus-bottom 收益。
+- `lowvol` 的 RankIC 正比例较高，但收益幅度加权 RankIC 接近 0，execution 口径下转负，说明正 IC 月份的收益幅度不足以抵消负向尾部月份。
+- `reversal` 在 close-to-close 和 execution 口径下均保持正 Pearson、正线性 payoff 和正多空收益，仍是当前最可靠的核心因子。
+- `growth` 的线性 payoff 和分组多空为正，但 RankIC 和稳定性偏弱，适合作为观察或辅助因子。
+- `quality` 继续缺乏有效证据，应保持弱因子/降权观察标签。
+
+下一步建议更新：
+
+1. 暂不把 `value` 和 `lowvol` 直接作为“可交易尾部收益”核心因子，先把它们标记为 `rank_ic_group_return_conflict_review`，继续检查是否来自行业内标准化、因子非线性或极端月份暴露。
+2. 优先对 `reversal + growth`、`reversal + lowvol`、`reversal + value` 做小规模消融实验，比较收益是否来自 `reversal` 单因子还是组合相关结构。
+3. 对 `baseline_v1_value_lowvol_reversal` 做缓冲带或换手约束实验时，要额外观察 `value/lowvol` 的逐期 payoff 是否改善，而不是只看组合总收益。
+4. 后续报告可增加 payoff by year 和极端月份归因，把 `value`、`lowvol` 的负尾部月份单独列出。

@@ -7,12 +7,46 @@ def calc_forward_return(
     price: pd.DataFrame,
     horizon: int = 20,
 ) -> pd.DataFrame:
-    df = price[["ts_code", "trade_date", "adj_close"]].copy()
+    return calc_forward_return_from_prices(
+        price,
+        horizon=horizon,
+        start_price_col="adj_close",
+        end_price_col="adj_close",
+        start_lag=0,
+        end_lag=horizon,
+    )
+
+
+def calc_forward_return_from_prices(
+    price: pd.DataFrame,
+    horizon: int = 20,
+    start_price_col: str = "adj_close",
+    end_price_col: str = "adj_close",
+    start_lag: int = 0,
+    end_lag: int | None = None,
+) -> pd.DataFrame:
+    if end_lag is None:
+        end_lag = start_lag + horizon
+
+    required = {"ts_code", "trade_date", start_price_col, end_price_col}
+    if not required.issubset(price.columns):
+        missing = ", ".join(sorted(required - set(price.columns)))
+        raise ValueError(f"price is missing required columns: {missing}")
+
+    price_cols = list(dict.fromkeys([
+        "ts_code",
+        "trade_date",
+        start_price_col,
+        end_price_col,
+    ]))
+    df = price[price_cols].copy()
     df = df.sort_values(["ts_code", "trade_date"])
 
-    df["future_close"] = df.groupby("ts_code")["adj_close"].shift(-horizon)
+    grouped = df.groupby("ts_code", sort=False)
+    df["start_price"] = grouped[start_price_col].shift(-start_lag)
+    df["future_price"] = grouped[end_price_col].shift(-end_lag)
 
-    df["future_return"] = df["future_close"] / df["adj_close"] - 1
+    df["future_return"] = df["future_price"] / df["start_price"] - 1
 
     return df[["ts_code", "trade_date", "future_return"]]
 
@@ -67,6 +101,8 @@ def calc_rank_ic_matrix(
 
             factor_rank = g.loc[valid, factor_name].rank()
             ret_rank = ret.loc[valid].rank()
+            if factor_rank.nunique() < 2 or ret_rank.nunique() < 2:
+                continue
             ic = factor_rank.corr(ret_rank)
 
             records.append({
