@@ -1689,3 +1689,431 @@ rebalance_turnover_by_year.csv
 3. 增加 `Top60 / Top80`、`Top60 / Top100`、`Top70 / Top100` 等邻域实验，判断最优点是否稳定在 60 只持仓附近。
 4. 基于新增 `annual_returns.csv`、`monthly_drawdown.csv` 和 `rebalance_turnover_by_year.csv`，下一轮重点做 2018、2022、2023 压力年份拆解，比较无缓冲、Top50/80、Top60/90 的收益损失、回撤月份和换手来源。
 5. 继续保留 `baseline_v0_current_weights` 作为审计基线，所有候选仍需等数据偏差、行业约束和更真实交易约束继续修复后再决定是否主线化。
+
+## 21. 执行进度记录（2026-06-16，`Top60 / Top90` 成本压力、邻域参数与压力年份拆解）
+
+本轮按上一节建议继续推进，围绕当前最强候选 `baseline_v1_reversal_growth_top60_buffer_90` 补充 2x/3x 成本压力测试，并增加相邻持仓数和缓冲宽度实验，同时把 2018、2022、2023 压力年份对比固化为独立产物：
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 扩展 `build_reversal_growth_turnover_control_experiments`，新增：
+  - `baseline_v1_reversal_growth_top60_buffer_80`
+  - `baseline_v1_reversal_growth_top60_buffer_100`
+  - `baseline_v1_reversal_growth_top70_buffer_100`
+- `src/ashare_alpha/analysis/weight_experiments.py` 扩展 `build_reversal_growth_buffer_cost_experiments`，新增：
+  - `baseline_v1_reversal_growth_top60_buffer_90_cost_2x`
+  - `baseline_v1_reversal_growth_top60_buffer_90_cost_3x`
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_pressure_year_diagnostics`，用于汇总指定压力年份的分年收益、最差月份、最大月内回撤月份、目标换手和持仓留存率。
+- `scripts/07_run_weight_experiments.py` 新增输出：
+  - `results/experiments/weight_baselines/pressure_year_comparison.csv`
+  - `results/experiments/weight_baselines/pressure_year_comparison.md`
+- `tests/test_weight_experiments.py` 扩展测试，覆盖新增邻域实验、`Top60 / Top90` 成本压力实验和压力年份诊断。
+- `.gitignore` 新增 `.pytest_tmp/`，用于忽略本机 pytest 临时目录。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_reversal_growth_top60_buffer_80/
+  baseline_v1_reversal_growth_top60_buffer_100/
+  baseline_v1_reversal_growth_top70_buffer_100/
+  baseline_v1_reversal_growth_top60_buffer_90_cost_2x/
+  baseline_v1_reversal_growth_top60_buffer_90_cost_3x/
+  pressure_year_comparison.csv
+  pressure_year_comparison.md
+  summary.csv
+  comparison.md
+```
+
+验证结果：
+
+- `pytest -q tests/test_weight_experiments.py`：`11 passed`。
+- `pytest -q` 首次因 Windows 用户 Temp 目录权限失败；将 `TEMP/TMP` 指向工作区临时目录后重跑：`43 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新 `results/experiments/weight_baselines/summary.csv`、`comparison.md`、新增压力年份对比文件和各实验目录产物。
+
+核心结果：
+
+| 实验 | 成本倍率 | 持仓 / 缓冲 | 最终净值 | 年化收益 | 最大回撤 | 回测平均换手 | 目标权重换手 | 持仓留存率 | 中证500年化超额 | 中证500 IR |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline_v1_reversal_growth_top60_buffer_80 | 1.0x | Top60 / Top80 | 4.4371 | 21.33% | -34.10% | 55.89% | 54.50% | 45.50% | 18.77% | 1.64 |
+| baseline_v1_reversal_growth_top60_buffer_90 | 1.0x | Top60 / Top90 | 4.6118 | 21.94% | -34.30% | 52.86% | 51.22% | 48.78% | 19.36% | 1.69 |
+| baseline_v1_reversal_growth_top60_buffer_100 | 1.0x | Top60 / Top100 | 4.3854 | 21.15% | -35.55% | 49.78% | 47.96% | 52.04% | 18.59% | 1.61 |
+| baseline_v1_reversal_growth_top70_buffer_100 | 1.0x | Top70 / Top100 | 4.3501 | 21.02% | -32.77% | 52.38% | 50.96% | 49.04% | 18.46% | 1.72 |
+| baseline_v1_reversal_growth_top60_buffer_90_cost_2x | 2.0x | Top60 / Top90 | 4.1432 | 20.26% | -35.37% | 52.90% | 51.22% | 48.78% | 17.71% | 1.56 |
+| baseline_v1_reversal_growth_top60_buffer_90_cost_3x | 3.0x | Top60 / Top90 | 3.7045 | 18.52% | -37.79% | 52.89% | 51.22% | 48.78% | 16.02% | 1.43 |
+
+压力年份对比：
+
+| 实验 | 年份 | 年度收益 | 最差月份 | 最差月收益 | 最大回撤月份 | 月内最深回撤 | 年均目标换手 | 年均留存率 |
+| --- | ---: | ---: | --- | ---: | --- | ---: | ---: | ---: |
+| baseline_v1_reversal_growth | 2018 | -15.30% | 2018-12 | -8.24% | 2018-10 | -28.54% | 70.00% | 30.00% |
+| baseline_v1_reversal_growth | 2022 | -7.19% | 2022-04 | -13.13% | 2022-04 | -34.63% | 63.67% | 36.33% |
+| baseline_v1_reversal_growth | 2023 | -7.36% | 2023-03 | -4.14% | 2023-10 | -19.89% | 61.50% | 38.50% |
+| baseline_v1_reversal_growth_buffer_80 | 2018 | -12.92% | 2018-12 | -6.53% | 2018-10 | -29.54% | 57.40% | 42.60% |
+| baseline_v1_reversal_growth_buffer_80 | 2022 | -11.12% | 2022-04 | -14.17% | 2022-04 | -32.66% | 49.67% | 50.33% |
+| baseline_v1_reversal_growth_buffer_80 | 2023 | -5.64% | 2023-03 | -4.52% | 2023-10 | -19.98% | 51.17% | 48.83% |
+| baseline_v1_reversal_growth_top60_buffer_90 | 2018 | -13.99% | 2018-10 | -5.70% | 2018-10 | -29.48% | 55.17% | 44.83% |
+| baseline_v1_reversal_growth_top60_buffer_90 | 2022 | -8.04% | 2022-04 | -13.07% | 2022-04 | -32.81% | 50.00% | 50.00% |
+| baseline_v1_reversal_growth_top60_buffer_90 | 2023 | -6.21% | 2023-03 | -3.96% | 2023-12 | -19.04% | 48.89% | 51.11% |
+
+新增发现：
+
+- `Top60 / Top90 buffer` 的优势经受住了成本压力测试：2x 成本下年化收益 `20.26%`、中证 500 IR `1.56`；3x 成本下年化收益仍为 `18.52%`、IR `1.43`，继续显著高于 `baseline_v0_current_weights`。
+- 相比上一轮 `Top50 / Top80 buffer` 的 3x 成本版本，`Top60 / Top90 buffer` 的 3x 成本最终净值基本持平略高，最大回撤更浅，IR 明显更高，说明它不是只在 1x 成本下偶然占优。
+- 邻域实验显示，`Top60 / Top80` 缓冲偏窄，换手更高且收益不如 `Top60 / Top90`；`Top60 / Top100` 缓冲偏宽，换手下降但收益和回撤变差；因此 `Top60 / Top90` 仍是当前收益型最强候选。
+- `Top70 / Top100` 虽然最终净值低于 `Top60 / Top90`，但最大回撤降至 `-32.77%`，中证 500 IR 升至 `1.72`，是值得保留的风险控制型候选。
+- 压力年份拆解显示，缓冲带显著降低了 2018、2022、2023 的目标换手；`Top60 / Top90` 在 2023 的最差月收益和月内最深回撤均优于无缓冲与 `Top50 / Top80`，但 2018 和 2022 仍是主要亏损来源。
+
+下一步建议更新：
+
+1. 继续将 `baseline_v1_reversal_growth_top60_buffer_90` 标记为当前收益型最强候选，同时把 `baseline_v1_reversal_growth_top70_buffer_100` 加入风险控制型候选观察池。
+2. 下一轮优先做最大单期换手上限实验，例如 `max_turnover_per_rebalance = 30% / 40% / 50%`，判断能否在 `Top60 / Top90` 或 `Top70 / Top100` 基础上进一步压低交易强度。
+3. 对 2018、2022、2023 做更细的压力归因，重点拆解 2022-04、2018-10、2023-12 的持仓、行业和因子暴露变化。
+4. 继续保留 `baseline_v0_current_weights` 作为审计基线，所有候选仍需等数据偏差、行业约束和更真实交易约束继续修复后再决定是否主线化。
+
+---
+
+## 22. 执行进度记录（2026-06-16，最大单期换手上限与压力月份归因）
+
+本轮按上一节建议继续推进，围绕收益型候选 `baseline_v1_reversal_growth_top60_buffer_90` 和风险控制型候选 `baseline_v1_reversal_growth_top70_buffer_100` 增加最大单期换手上限实验，并把 2018-10、2022-04、2023-12 的压力月份持仓、行业和因子暴露变化固化为独立产物：
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_reversal_growth_turnover_cap_experiments`，统一定义：
+  - `baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_30`
+  - `baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_40`
+  - `baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_50`
+  - `baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_30`
+  - `baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_40`
+  - `baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_50`
+- `build_rank_buffered_signal` 支持 `max_turnover_per_rebalance`。逻辑是在 rank buffer 候选基础上，当上期持仓仍在当期候选池时，额外保留足够多旧持仓，使新增名字数不超过目标持仓数的 30% / 40% / 50%。
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_pressure_month_attribution`，用于汇总指定压力月份的月收益、月内最深回撤、目标换手、持仓留存、行业集中度、头部行业、因子暴露和暴露变化。
+- `scripts/07_run_weight_experiments.py` 接入换手封顶实验，并在总表中新增 `max_turnover_per_rebalance` 字段。
+- `scripts/07_run_weight_experiments.py` 新增输出：
+  - `results/experiments/weight_baselines/pressure_month_attribution.csv`
+  - `results/experiments/weight_baselines/pressure_month_attribution.md`
+- `tests/test_weight_experiments.py` 扩展测试，覆盖换手封顶实验定义、rank buffer 换手封顶行为和压力月份归因拼接。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_30/
+  baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_40/
+  baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_50/
+  baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_30/
+  baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_40/
+  baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_50/
+  pressure_month_attribution.csv
+  pressure_month_attribution.md
+  pressure_year_comparison.csv
+  pressure_year_comparison.md
+  summary.csv
+  comparison.md
+```
+
+验证结果：
+
+- `pytest -q tests/test_weight_experiments.py`：`14 passed`。
+- `pytest -q` 首次仍因 Windows 本机 `.pytest_tmp/pytest-of-31546` 权限问题失败；改用独立临时目录后重跑：`pytest -q --basetemp=.pytest_tmp/current`：`46 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新权重实验总表、压力年份对比、压力月份归因和新增换手封顶实验目录。
+
+核心结果：
+
+| 实验 | 换手上限 | 最终净值 | 年化收益 | 最大回撤 | 回测平均换手 | 目标权重换手 | 持仓留存率 | 中证500年化超额 | 中证500 IR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline_v1_reversal_growth_top60_buffer_90 | - | 4.6118 | 21.94% | -34.30% | 52.86% | 51.22% | 48.78% | 19.36% | 1.69 |
+| baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_30 | 30% | 3.8768 | 19.22% | -40.98% | 32.80% | 29.93% | 70.07% | 16.70% | 1.47 |
+| baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_40 | 40% | 3.9593 | 19.55% | -36.59% | 41.88% | 39.59% | 60.41% | 17.02% | 1.50 |
+| baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_50 | 50% | 4.4475 | 21.37% | -34.21% | 49.00% | 47.11% | 52.89% | 18.80% | 1.65 |
+| baseline_v1_reversal_growth_top70_buffer_100 | - | 4.3501 | 21.02% | -32.77% | 52.38% | 50.96% | 49.04% | 18.46% | 1.72 |
+| baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_30 | 30% | 3.6683 | 18.37% | -38.13% | 32.67% | 29.98% | 70.02% | 15.87% | 1.53 |
+| baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_40 | 40% | 3.9028 | 19.33% | -34.33% | 41.71% | 39.54% | 60.46% | 16.80% | 1.60 |
+| baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_50 | 50% | 4.2233 | 20.56% | -32.87% | 48.68% | 47.01% | 52.99% | 18.01% | 1.69 |
+
+压力月份局部观察：
+
+| 实验 | 月份 | 月收益 | 月内最深回撤 | 目标换手 | 持仓留存率 | 头部行业权重 | growth 暴露变化 | reversal 暴露变化 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Top60 / Top90 | 2018-10 | -5.70% | -29.48% | 55.00% | 45.00% | 43.33% | -0.1918 | 0.1025 |
+| Top60 / Top90 cap 40 | 2018-10 | -2.66% | -30.08% | 40.00% | 60.00% | 45.00% | -0.1440 | 0.0054 |
+| Top60 / Top90 | 2022-04 | -13.07% | -32.81% | 50.00% | 50.00% | 56.67% | -0.0292 | -0.0356 |
+| Top60 / Top90 cap 40 | 2022-04 | -12.99% | -32.64% | 40.00% | 60.00% | 55.00% | -0.1033 | 0.0146 |
+| Top60 / Top90 | 2023-12 | -1.55% | -19.04% | 53.33% | 46.67% | 43.33% | -0.0014 | -0.0645 |
+| Top60 / Top90 cap 40 | 2023-12 | -1.45% | -21.66% | 40.00% | 60.00% | 43.33% | 0.0317 | -0.0762 |
+
+新增发现：
+
+- 换手上限机制按预期生效：Top60 / Top90 的 30%、40%、50% 实验目标权重换手分别约为 `29.93%`、`39.59%`、`47.11%`；Top70 / Top100 分别约为 `29.98%`、`39.54%`、`47.01%`。
+- 30% 和 40% 上限过紧，虽然显著降低换手并提高持仓留存率，但会保留更多已经降分的旧持仓，导致收益下降、最大回撤加深，尤其 Top60 / Top90 cap 30 最大回撤扩大到 `-40.98%`。
+- 50% 上限是相对温和的折中：Top60 / Top90 cap 50 将目标权重换手从 `51.22%` 降至 `47.11%`，年化收益从 `21.94%` 降至 `21.37%`，IR 从 `1.69` 降至 `1.65`，但最大回撤小幅改善至 `-34.21%`。
+- 对风险控制型候选 `Top70 / Top100`，cap 50 也能压低换手，但收益和 IR 均略低于原始 Top70 / Top100，最大回撤基本持平略差，因此暂未证明换手封顶能进一步增强风险控制候选。
+- 压力月份归因显示，换手封顶可在部分压力月降低当月损失，例如 Top60 / Top90 cap 40 在 2018-10 的月收益从 `-5.70%` 改善至 `-2.66%`；但它并不稳定改善月内最深回撤，2023-12 的月内最深回撤反而从 `-19.04%` 加深至 `-21.66%`。
+
+下一步建议更新：
+
+1. 继续将 `baseline_v1_reversal_growth_top60_buffer_90` 标记为收益型最强候选，将 `baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_50` 标记为温和降换手候选观察项。
+2. 暂不采用 30% / 40% 单期换手硬上限作为主线配置；它们更适合作为压力测试边界，而不是当前最优方案。
+3. 下一轮优先做“软换手惩罚”或“分层卖出”实验，例如只对 rank 明显恶化的旧持仓强制卖出，而不是固定保留到换手上限。
+4. 压力归因继续下钻 2022-04 和 2018-10：拆解具体持仓贡献、行业收益贡献和旧持仓保留造成的损益差异。
+5. 继续保留 `baseline_v0_current_weights` 作为审计基线，所有候选仍需等数据偏差、行业约束和更真实交易约束继续修复后再决定是否主线化。
+
+---
+
+## 23. 执行进度记录（2026-06-17，软换手排名奖励与分层退出实验）
+
+本轮按上一节建议继续推进，优先实现“软换手惩罚/分层卖出”实验：旧持仓不再被固定保留到换手上限，而是获得一个可配置的排名奖励；一旦旧持仓原始 rank 恶化超过强制退出线，则不再给予保留资格。
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_rank_soft_turnover_signal`：
+  - 对上期持仓施加 `retention_rank_bonus`，用 `soft_turnover_adjusted_rank` 排序选股。
+  - 对旧持仓设置 `force_exit_rank`，超过该 rank 的旧持仓强制退出软保留候选。
+  - 在目标权重中保留 `is_soft_retained`、`is_soft_bonus_retained`、`soft_turnover_rank_bonus` 和 `soft_turnover_force_exit_rank`，便于压力月份归因。
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_reversal_growth_soft_turnover_experiments`，统一定义：
+  - `baseline_v1_reversal_growth_top60_soft_bonus_10_exit_90`
+  - `baseline_v1_reversal_growth_top60_soft_bonus_20_exit_90`
+  - `baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90`
+  - `baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100`
+- `scripts/07_run_weight_experiments.py` 接入 `rank_soft_turnover` 选择方法，并在 `summary.csv` / `comparison.md` 中输出 `retention_rank_bonus` 和 `force_exit_rank`。
+- `build_pressure_month_attribution` 和 `pressure_month_attribution.md` 增加软保留相关字段，便于观察压力月份中旧持仓保留数量和 bonus 保留数量。
+- `tests/test_weight_experiments.py` 扩展测试，覆盖软换手实验定义、排名奖励选择行为、强制退出行为和压力月份软保留字段拼接。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_reversal_growth_top60_soft_bonus_10_exit_90/
+  baseline_v1_reversal_growth_top60_soft_bonus_20_exit_90/
+  baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90/
+  baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100/
+  summary.csv
+  comparison.md
+  pressure_year_comparison.csv
+  pressure_year_comparison.md
+  pressure_month_attribution.csv
+  pressure_month_attribution.md
+```
+
+验证结果：
+
+- `pytest -q tests/test_weight_experiments.py`：`16 passed`。
+- `pytest -q --basetemp=.pytest_tmp/current`：`48 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新权重实验总表、压力年份对比、压力月份归因和新增软换手实验目录。
+
+核心结果：
+
+| 实验 | 机制 | 最终净值 | 年化收益 | 最大回撤 | 回测平均换手 | 目标权重换手 | 持仓留存率 | 中证500年化超额 | 中证500 IR |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline_v1_reversal_growth_top60_buffer_90 | Top60 / Top90 buffer | 4.6118 | 21.94% | -34.30% | 52.86% | 51.22% | 48.78% | 19.36% | 1.69 |
+| baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_50 | Top60 / Top90 cap 50 | 4.4475 | 21.37% | -34.21% | 49.00% | 47.11% | 52.89% | 18.80% | 1.65 |
+| baseline_v1_reversal_growth_top60_soft_bonus_10_exit_90 | Top60 soft +10 / exit90 | 4.3885 | 21.16% | -33.61% | 60.35% | 59.26% | 40.74% | 18.60% | 1.65 |
+| baseline_v1_reversal_growth_top60_soft_bonus_20_exit_90 | Top60 soft +20 / exit90 | 4.4502 | 21.38% | -34.04% | 57.63% | 56.37% | 43.63% | 18.81% | 1.67 |
+| baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90 | Top60 soft +30 / exit90 | 4.5906 | 21.87% | -33.65% | 55.12% | 53.62% | 46.38% | 19.29% | 1.69 |
+| baseline_v1_reversal_growth_top70_buffer_100 | Top70 / Top100 buffer | 4.3501 | 21.02% | -32.77% | 52.38% | 50.96% | 49.04% | 18.46% | 1.72 |
+| baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100 | Top70 soft +30 / exit100 | 4.4748 | 21.46% | -32.57% | 54.95% | 53.71% | 46.29% | 18.90% | 1.76 |
+
+压力月份局部观察：
+
+| 实验 | 月份 | 月收益 | 月内最深回撤 | 目标换手 | 持仓留存率 | 软保留数 | bonus 保留数 | growth 暴露变化 | reversal 暴露变化 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Top60 / Top90 | 2018-10 | -5.70% | -29.48% | 55.00% | 45.00% | - | - | -0.1918 | 0.1025 |
+| Top60 soft +10 / exit90 | 2018-10 | -7.52% | -28.22% | 68.33% | 31.67% | 19 | 3 | -0.1456 | 0.0242 |
+| Top60 soft +20 / exit90 | 2018-10 | -6.06% | -28.56% | 63.33% | 36.67% | 22 | 4 | -0.2056 | 0.0937 |
+| Top60 soft +30 / exit90 | 2018-10 | -6.16% | -29.66% | 60.00% | 40.00% | 24 | 6 | -0.1954 | 0.0921 |
+| Top60 / Top90 | 2022-04 | -13.07% | -32.81% | 50.00% | 50.00% | - | - | -0.0292 | -0.0356 |
+| Top60 soft +30 / exit90 | 2022-04 | -13.28% | -33.65% | 51.67% | 48.33% | 29 | 5 | -0.0337 | -0.0301 |
+| Top70 soft +30 / exit100 | 2022-04 | -12.82% | -32.57% | 54.29% | 45.71% | 32 | 4 | 0.0328 | -0.1061 |
+
+新增发现：
+
+- 软换手机制按预期生效，但不是单调降低换手；`retention_rank_bonus` 越高，留存率越高、换手越低。Top60 的 +10、+20、+30 实验目标权重换手分别约为 `59.26%`、`56.37%`、`53.62%`。
+- `Top60 soft +30 / exit90` 是最接近原收益型候选的软换手方案：年化收益 `21.87%` 基本贴近 `Top60 / Top90 buffer` 的 `21.94%`，最大回撤从 `-34.30%` 改善到 `-33.65%`，但目标权重换手仍高于原方案的 `51.22%`。
+- `Top60 soft +10 / exit90` 过于接近无缓冲排名，换手升至 `59.26%`，收益和 IR 均低于 `Top60 / Top90 buffer`，说明过小的排名奖励不足以形成有效持仓稳定性。
+- `Top70 soft +30 / exit100` 是新的风险控制型观察项：相对 `Top70 / Top100 buffer`，年化收益从 `21.02%` 提升到 `21.46%`，最大回撤从 `-32.77%` 小幅改善到 `-32.57%`，中证 500 IR 从 `1.72` 提升到 `1.76`，但换手也从 `50.96%` 升至 `53.71%`。
+- 压力月份表现没有全面改善。`Top60 soft +30 / exit90` 在 2018-10 和 2022-04 的月收益均略弱于 `Top60 / Top90 buffer`；`Top70 soft +30 / exit100` 在 2022-04 的月收益和月内最深回撤略优，但 2018-10 月收益更差。
+
+下一步建议更新：
+
+1. 继续把 `baseline_v1_reversal_growth_top60_buffer_90` 标记为收益型主候选；把 `baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90` 标记为收益型近邻候选，而不是替代主候选。
+2. 将 `baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100` 加入风险控制型候选观察池；它的 IR 和最大回撤目前优于 `Top70 / Top100 buffer`，但换手更高，需要做成本压力测试。
+3. 下一轮优先对两个软换手近邻做成本压力测试：`Top60 soft +30 / exit90` 和 `Top70 soft +30 / exit100` 的 2x/3x 成本版本。
+4. 继续下钻 2018-10 和 2022-04 的具体持仓贡献、行业收益贡献和旧持仓保留损益差异，尤其比较 `Top60 / Top90 buffer`、`Top60 soft +30 / exit90` 与 `Top70 soft +30 / exit100`。
+5. 继续保留 `baseline_v0_current_weights` 作为审计基线，所有候选仍需等数据偏差、行业约束和更真实交易约束继续修复后再决定是否主线化。
+
+---
+
+## 24. 执行进度记录（2026-06-17，软换手成本压力与压力月份持仓贡献）
+
+本轮按上一节建议继续推进，优先补齐两个软换手近邻的 2x/3x 成本压力测试，并进一步下钻 2018-10、2022-04 的持仓、行业和旧持仓保留贡献：
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_reversal_growth_soft_turnover_cost_experiments`，统一定义：
+  - `baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_cost_2x`
+  - `baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_cost_3x`
+  - `baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_cost_2x`
+  - `baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_cost_3x`
+- `scripts/07_run_weight_experiments.py` 接入软换手成本压力实验，并在 `comparison.md` 中补充 `cost_multiplier`，避免成本版本与 1x 版本混在一起不易辨认。
+- `src/ashare_alpha/analysis/weight_experiments.py` 新增 `build_pressure_month_holding_contribution`，用目标权重计算“执行日至该月最后可用交易日”的近似持仓贡献，保留 `retention_bucket`、行业、rank、收益和贡献字段。该表用于比较选股与保留机制，不等同于真实成交后净值 P&L。
+- `scripts/07_run_weight_experiments.py` 新增输出：
+  - `results/experiments/weight_baselines/pressure_month_holding_contribution.csv`
+  - `results/experiments/weight_baselines/pressure_month_holding_contribution.md`
+- `tests/test_weight_experiments.py` 扩展测试，覆盖软换手成本压力实验定义和压力月份持仓贡献计算。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_cost_2x/
+  baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_cost_3x/
+  baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_cost_2x/
+  baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_cost_3x/
+  pressure_month_holding_contribution.csv
+  pressure_month_holding_contribution.md
+  summary.csv
+  comparison.md
+```
+
+验证结果：
+
+- `pytest -q tests/test_weight_experiments.py`：`18 passed`。
+- `pytest -q --basetemp=.pytest_tmp/current`：`50 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新权重实验总表、成本压力版本、压力年份/月度归因和新增持仓贡献归因。
+
+成本压力核心结果：
+
+| 实验 | 成本倍率 | 最终净值 | 年化收益 | 最大回撤 | 回测平均换手 | 目标权重换手 | 留存率 | 中证500年化超额 | 中证500 IR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline_v1_reversal_growth_top60_buffer_90 | 1.0x | 4.6118 | 21.94% | -34.30% | 52.86% | 51.22% | 48.78% | 19.36% | 1.69 |
+| baseline_v1_reversal_growth_top60_buffer_90_cost_2x | 2.0x | 4.1432 | 20.26% | -35.37% | 52.90% | 51.22% | 48.78% | 17.71% | 1.56 |
+| baseline_v1_reversal_growth_top60_buffer_90_cost_3x | 3.0x | 3.7045 | 18.52% | -37.79% | 52.89% | 51.22% | 48.78% | 16.02% | 1.43 |
+| baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90 | 1.0x | 4.5906 | 21.87% | -33.65% | 55.12% | 53.62% | 46.38% | 19.29% | 1.69 |
+| baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_cost_2x | 2.0x | 4.1104 | 20.13% | -35.55% | 55.15% | 53.62% | 46.38% | 17.59% | 1.55 |
+| baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_cost_3x | 3.0x | 3.6611 | 18.34% | -38.05% | 55.13% | 53.62% | 46.38% | 15.84% | 1.41 |
+| baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100 | 1.0x | 4.4748 | 21.46% | -32.57% | 54.95% | 53.71% | 46.29% | 18.90% | 1.76 |
+| baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_cost_2x | 2.0x | 3.9879 | 19.66% | -33.52% | 54.98% | 53.71% | 46.29% | 17.13% | 1.61 |
+| baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_cost_3x | 3.0x | 3.5679 | 17.95% | -35.66% | 55.01% | 53.71% | 46.29% | 15.45% | 1.46 |
+
+压力月份目标权重近似贡献：
+
+| 实验 | 月份 | 近似持仓贡献 | 关键保留分组观察 |
+| --- | --- | ---: | --- |
+| Top60 / Top90 buffer | 2018-10 | -6.39% | 新进持仓 55% 权重贡献 -4.05%，buffer 保留 45% 权重贡献 -2.34%，旧持仓保留相对减损。 |
+| Top60 soft +30 / exit90 | 2018-10 | -6.86% | 新进持仓 60% 权重贡献 -4.61%，soft bonus 保留 10% 权重贡献 -0.32%，soft bonus 本身不差，但新进权重更多。 |
+| Top70 soft +30 / exit100 | 2018-10 | -6.30% | soft bonus 保留 5.71% 权重贡献接近 0，Top70 扩容在目标权重近似口径下略优。 |
+| Top60 / Top90 buffer | 2022-04 | -12.83% | buffer 保留 50% 权重的加权收益 -13.46%，弱于新进持仓的 -12.20%，旧持仓保留在该月拖累更明显。 |
+| Top60 soft +30 / exit90 | 2022-04 | -12.96% | soft bonus 保留 8.33% 权重的加权收益 -18.69%，是软换手在该月弱于主候选的重要来源。 |
+| Top70 soft +30 / exit100 | 2022-04 | -12.74% | soft bonus 保留 5.71% 权重的加权收益 -11.38%，弱于 2018-10 但好于 Top60 soft 的 bonus 保留。 |
+
+行业贡献观察：
+
+- 2018-10 的拖累主要集中在 `AK.IND.002` 和 `AK.IND.016`。Top60 soft 在 `AK.IND.002` 的贡献约 `-3.47%`，弱于 Top60 buffer 的 `-2.99%`。
+- 2022-04 的最大拖累集中在 `AK.IND.016`：Top60 buffer 约 `-7.56%`，Top60 soft 约 `-7.44%`，Top70 soft 约 `-6.84%`。Top70 soft 在该行业暴露略低，是其目标权重近似贡献略优的主要来源。
+- `AK.IND.002` 在 2022-04 对 Top70 soft 的拖累约 `-3.43%`，高于 Top60 buffer 的 `-2.66%` 和 Top60 soft 的 `-2.91%`，说明 Top70 soft 的改善不是全面行业改善，而是部分行业间权重再分配。
+
+新增发现：
+
+- `Top60 soft +30 / exit90` 的 1x 表现接近 `Top60 / Top90 buffer`，但在 2x/3x 成本下略落后：3x 年化收益 `18.34%` 低于主候选 3x 的 `18.52%`，最大回撤 `-38.05%` 也略深于 `-37.79%`。因此它仍是收益型近邻观察项，不宜替代主候选。
+- `Top70 soft +30 / exit100` 的风险控制特征在成本压力下仍然存在：3x 成本下年化收益 `17.95%`，最大回撤 `-35.66%`，中证500 IR `1.46`。收益低于 Top60 主候选，但回撤和 IR 仍有风险控制价值。
+- 旧持仓保留不是天然防御。2018-10 中部分保留持仓减损明显，但 2022-04 中 Top60 buffer 的旧持仓保留和 Top60 soft 的 soft bonus 保留反而拖累更重，说明下一轮需要引入“保留质量门槛”，而不是单纯提高留存。
+- 压力月份行业拖累具有集中性，尤其 `AK.IND.016` 在 2022-04 的影响很大。后续如果加入行业约束或行业风险预算，应优先观察该类集中暴露是否被动形成。
+
+下一步建议更新：
+
+1. 继续把 `baseline_v1_reversal_growth_top60_buffer_90` 作为收益型主候选；`baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90` 保留为近邻观察项，不替代。
+2. 将 `baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100` 继续作为风险控制型候选；下一轮应补齐 `Top70 / Top100 buffer` 的 2x/3x 成本版本，形成直接对照。
+3. 下一轮优先做“保留质量门槛”实验：例如旧持仓只有在 raw rank 未明显恶化、行业集中度不过高、或近月风险暴露未恶化时才享受 bonus / buffer 保留。
+4. 压力月份归因继续从目标权重近似贡献推进到真实成交 P&L 贡献，拆分交易成本、执行日缺口、持有期收益和行业贡献。
+5. 继续保留 `baseline_v0_current_weights` 作为审计基线，所有候选仍需等数据偏差、行业约束和更真实交易约束继续修复后再决定是否主线化。
+
+---
+
+## 25. 执行进度记录（2026-06-17，Top70 成本对照、保留质量门槛与真实成交 P&L 归因）
+
+本轮按上一节建议继续推进，先补齐 `Top70 / Top100 buffer` 的 2x/3x 成本压力版本，随后实现基于 raw rank 的“保留质量门槛”，并把压力月份归因从目标权重近似贡献推进到真实成交 P&L 贡献口径。
+
+- `src/ashare_alpha/analysis/weight_experiments.py` 扩展 `build_reversal_growth_buffer_cost_experiments`，新增：
+  - `baseline_v1_reversal_growth_top70_buffer_100_cost_2x`
+  - `baseline_v1_reversal_growth_top70_buffer_100_cost_3x`
+- `build_rank_buffered_signal` 新增 `retention_quality_rank`：旧持仓只有 raw rank 仍在质量门槛内，才享受 buffer 留存资格。
+- `build_rank_soft_turnover_signal` 新增 `retention_quality_rank`：旧持仓只有 raw rank 仍在质量门槛内，才享受 soft rank bonus；超过门槛但未超过 `force_exit_rank` 的旧持仓仍可自然入选，但不再被 bonus 保送。
+- 新增 `build_reversal_growth_retention_quality_experiments`，统一定义：
+  - `baseline_v1_reversal_growth_top60_buffer_90_quality_rank_80`
+  - `baseline_v1_reversal_growth_top70_buffer_100_quality_rank_90`
+  - `baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_quality_rank_80`
+  - `baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_quality_rank_90`
+- 新增 `build_pressure_month_realized_pnl_contribution`，按真实回测 `positions` 与 `trades` 计算压力月份股票级 P&L：
+  - `gross_pnl = end_market_value - start_market_value + sell_amount - buy_amount`
+  - `net_pnl = gross_pnl - trade_cost`
+  - 同时保留 `retention_bucket`、行业、rank、target weight、交易成本贡献等字段。
+- `scripts/07_run_weight_experiments.py` 接入质量门槛实验、真实成交 P&L 贡献输出，并在 `summary.csv` / `comparison.md` / `pressure_month_attribution.md` 中补充 `retention_quality_rank`。
+- `tests/test_weight_experiments.py` 扩展测试，覆盖 Top70 buffer 成本版本、质量门槛实验定义、buffer/soft 门槛选择行为、压力月份真实成交 P&L 贡献。
+
+新增输出：
+
+```text
+results/experiments/weight_baselines/
+  baseline_v1_reversal_growth_top70_buffer_100_cost_2x/
+  baseline_v1_reversal_growth_top70_buffer_100_cost_3x/
+  baseline_v1_reversal_growth_top60_buffer_90_quality_rank_80/
+  baseline_v1_reversal_growth_top70_buffer_100_quality_rank_90/
+  baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_quality_rank_80/
+  baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_quality_rank_90/
+  pressure_month_realized_pnl_contribution.csv
+  pressure_month_realized_pnl_contribution.md
+  summary.csv
+  comparison.md
+  pressure_month_attribution.csv
+  pressure_month_attribution.md
+```
+
+验证结果：
+
+- `pytest -q tests/test_weight_experiments.py`：`22 passed`。
+- `pytest -q --basetemp=.pytest_tmp/current`：`54 passed`。
+- 已运行 `python scripts/07_run_weight_experiments.py`，刷新权重实验总表、Top70 buffer 成本对照、质量门槛实验、压力月份目标权重归因和真实成交 P&L 归因。
+
+Top70 成本压力直接对照：
+
+| 实验 | 成本倍率 | 最终净值 | 年化收益 | 最大回撤 | 目标权重换手 | 留存率 | 中证500年化超额 | 中证500 IR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Top70 / Top100 buffer | 1.0x | 4.3501 | 21.02% | -32.77% | 50.96% | 49.04% | 18.46% | 1.72 |
+| Top70 / Top100 buffer | 2.0x | 3.9152 | 19.38% | -34.39% | 50.96% | 49.04% | 16.85% | 1.58 |
+| Top70 / Top100 buffer | 3.0x | 3.5136 | 17.71% | -36.40% | 50.96% | 49.04% | 15.22% | 1.44 |
+| Top70 soft +30 / exit100 | 1.0x | 4.4748 | 21.46% | -32.57% | 53.71% | 46.29% | 18.90% | 1.76 |
+| Top70 soft +30 / exit100 | 2.0x | 3.9879 | 19.66% | -33.52% | 53.71% | 46.29% | 17.13% | 1.61 |
+| Top70 soft +30 / exit100 | 3.0x | 3.5679 | 17.95% | -35.66% | 53.71% | 46.29% | 15.45% | 1.46 |
+
+保留质量门槛核心结果：
+
+| 实验 | 质量门槛 | 最终净值 | 年化收益 | 最大回撤 | 目标权重换手 | 留存率 | 中证500 IR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Top60 / Top90 buffer | - | 4.6118 | 21.94% | -34.30% | 51.22% | 48.78% | 1.69 |
+| Top60 / Top90 buffer quality | 80 | 4.4371 | 21.33% | -34.10% | 54.50% | 45.50% | 1.64 |
+| Top60 soft +30 / exit90 quality | 80 | 4.4284 | 21.30% | -33.97% | 54.63% | 45.37% | 1.64 |
+| Top70 / Top100 buffer | - | 4.3501 | 21.02% | -32.77% | 50.96% | 49.04% | 1.72 |
+| Top70 / Top100 buffer quality | 90 | 4.4411 | 21.34% | -32.62% | 54.41% | 45.59% | 1.75 |
+| Top70 soft +30 / exit100 quality | 90 | 4.4700 | 21.45% | -32.63% | 54.48% | 45.52% | 1.76 |
+
+真实成交 P&L 压力月份观察：
+
+| 实验 | 月份 | 真实成交净 P&L 贡献 | 交易成本拖累 | 观察 |
+| --- | --- | ---: | ---: | --- |
+| Top60 / Top90 buffer | 2018-10 | -10.31% | -0.11% | 优于 Top60 质量门槛和 Top60 soft，说明该月保留质量门槛没有改善真实成交口径。 |
+| Top60 / Top90 buffer quality | 2018-10 | -10.78% | -0.12% | buffer 保留损失变小，但新进和移除股票损失扩大，整体变差。 |
+| Top60 / Top90 buffer | 2022-04 | -12.72% | -0.11% | 旧持仓保留仍是主要拖累之一。 |
+| Top60 / Top90 buffer quality | 2022-04 | -12.86% | -0.12% | 质量门槛略降低旧持仓拖累，但新进股票损失扩大，整体仍弱。 |
+| Top70 / Top100 buffer | 2018-10 | -10.10% | -0.11% | 好于 Top70 质量门槛和 Top70 soft，主要来自非目标残留口径的正贡献。 |
+| Top70 / Top100 buffer quality | 2018-10 | -11.56% | -0.12% | 质量门槛明显恶化该月真实成交 P&L。 |
+| Top70 / Top100 buffer | 2022-04 | -12.71% | -0.11% | 与 Top70 soft 接近。 |
+| Top70 soft +30 / exit100 | 2022-04 | -12.40% | -0.12% | 在 2022-04 真实成交口径下优于 Top70 buffer，风险控制特征继续存在。 |
+
+新增发现：
+
+- `Top70 soft +30 / exit100` 在 2x/3x 成本下仍略优于 `Top70 / Top100 buffer`：3x 年化收益 `17.95%` 高于 buffer 的 `17.71%`，最大回撤 `-35.66%` 浅于 buffer 的 `-36.40%`，IR `1.46` 高于 buffer 的 `1.44`。因此它继续保留为风险控制型候选。
+- 简单 raw-rank 质量门槛不是稳定增强项。Top60 门槛显著提高换手、降低收益；Top70 buffer 门槛虽小幅改善全期年化和回撤，但在 2018-10 真实成交 P&L 中明显变差。
+- 质量门槛的主要副作用是减少旧持仓保留后增加新进/移除股票贡献的不确定性。旧持仓保留本身有时减损、有时拖累，不能只用单一 rank 门槛判断。
+- 真实成交 P&L 口径与目标权重近似贡献并不完全一致，尤其会暴露移除股票、非目标残留仓位和交易成本的影响；后续压力归因应优先保留两套口径并排观察。
+
+下一步建议更新：
+
+1. 继续把 `baseline_v1_reversal_growth_top60_buffer_90` 作为收益型主候选；Top60 的 quality rank 80 不建议替代主候选。
+2. 继续把 `baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100` 作为风险控制型候选；它在 Top70 buffer 直接成本对照中保持小幅优势。
+3. 暂不把简单 raw-rank 质量门槛主线化；下一轮更适合尝试“条件化保留门槛”，例如结合行业集中度、近期行业亏损、组合风险暴露变化，而不是只看单只股票 raw rank。
+4. 压力月份真实成交 P&L 归因继续下钻到执行日缺口和持有期收益拆分，尤其拆分新进、移除、旧持仓保留与非目标残留仓位的贡献差异。
+5. 继续保留 `baseline_v0_current_weights` 作为审计基线，所有候选仍需等数据偏差、行业约束和更真实交易约束继续修复后再决定是否主线化。
+
+---

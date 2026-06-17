@@ -11,11 +11,20 @@ from tqdm import tqdm
 
 from ashare_alpha.analysis.metrics import calc_performance
 from ashare_alpha.analysis.weight_experiments import (
+    build_pressure_month_holding_contribution,
+    build_pressure_month_realized_pnl_contribution,
+    build_pressure_month_attribution,
     build_reversal_ablation_experiments,
     build_reversal_growth_buffer_cost_experiments,
+    build_reversal_growth_retention_quality_experiments,
+    build_reversal_growth_soft_turnover_experiments,
+    build_reversal_growth_soft_turnover_cost_experiments,
+    build_reversal_growth_turnover_cap_experiments,
     build_reversal_growth_validation_experiments,
     build_reversal_growth_turnover_control_experiments,
     build_rank_buffered_signal,
+    build_rank_soft_turnover_signal,
+    build_pressure_year_diagnostics,
     calc_annual_return_diagnostics,
     calc_monthly_drawdown_diagnostics,
     calc_rebalance_turnover,
@@ -43,6 +52,39 @@ from ashare_alpha.strategy.universe import build_universe
 
 
 FACTOR_NAMES = ["value", "quality", "growth", "lowvol", "momentum", "reversal"]
+PRESSURE_YEARS = [2018, 2022, 2023]
+PRESSURE_MONTHS = ["2018-10", "2022-04", "2023-12"]
+PRESSURE_HOLDING_MONTHS = ["2018-10", "2022-04"]
+PRESSURE_EXPERIMENT_IDS = [
+    "baseline_v1_reversal_growth",
+    "baseline_v1_reversal_growth_buffer_80",
+    "baseline_v1_reversal_growth_top60_buffer_90",
+    "baseline_v1_reversal_growth_top70_buffer_100",
+    "baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_30",
+    "baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_40",
+    "baseline_v1_reversal_growth_top60_buffer_90_turnover_cap_50",
+    "baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_30",
+    "baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_40",
+    "baseline_v1_reversal_growth_top70_buffer_100_turnover_cap_50",
+    "baseline_v1_reversal_growth_top60_soft_bonus_10_exit_90",
+    "baseline_v1_reversal_growth_top60_soft_bonus_20_exit_90",
+    "baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90",
+    "baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100",
+    "baseline_v1_reversal_growth_top60_buffer_90_quality_rank_80",
+    "baseline_v1_reversal_growth_top70_buffer_100_quality_rank_90",
+    "baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_quality_rank_80",
+    "baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_quality_rank_90",
+]
+PRESSURE_HOLDING_EXPERIMENT_IDS = [
+    "baseline_v1_reversal_growth_top60_buffer_90",
+    "baseline_v1_reversal_growth_top60_buffer_90_quality_rank_80",
+    "baseline_v1_reversal_growth_top70_buffer_100",
+    "baseline_v1_reversal_growth_top70_buffer_100_quality_rank_90",
+    "baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90",
+    "baseline_v1_reversal_growth_top60_soft_bonus_30_exit_90_quality_rank_80",
+    "baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100",
+    "baseline_v1_reversal_growth_top70_soft_bonus_30_exit_100_quality_rank_90",
+]
 
 
 def _benchmark_config(data_config: dict) -> dict[str, str]:
@@ -172,6 +214,10 @@ def _experiment_definitions(config: dict, factor_summary: pd.DataFrame) -> list[
         *build_reversal_growth_validation_experiments(),
         *build_reversal_growth_turnover_control_experiments(),
         *build_reversal_growth_buffer_cost_experiments(),
+        *build_reversal_growth_turnover_cap_experiments(),
+        *build_reversal_growth_soft_turnover_experiments(),
+        *build_reversal_growth_soft_turnover_cost_experiments(),
+        *build_reversal_growth_retention_quality_experiments(),
     ]
 
 
@@ -249,6 +295,18 @@ def _generate_experiment_weights(
                 top_n=top_n,
                 entry_rank=int(selection_cfg.get("entry_rank", top_n)),
                 exit_rank=int(selection_cfg.get("exit_rank", top_n)),
+                max_turnover_per_rebalance=selection_cfg.get("max_turnover_per_rebalance"),
+                retention_quality_rank=selection_cfg.get("retention_quality_rank"),
+            )
+        elif selection_method == "rank_soft_turnover":
+            signal = build_rank_soft_turnover_signal(
+                date_scores,
+                universe,
+                previous_holdings=previous_holdings,
+                top_n=top_n,
+                retention_rank_bonus=int(selection_cfg.get("retention_rank_bonus", 20)),
+                force_exit_rank=selection_cfg.get("force_exit_rank"),
+                retention_quality_rank=selection_cfg.get("retention_quality_rank"),
             )
         else:
             signal = generate_signal(date_scores, universe, weight_config)
@@ -416,7 +474,12 @@ def _write_comparison_markdown(summary: pd.DataFrame, output_dir: Path) -> None:
         "turnover",
         "csi500_annual_excess_return",
         "csi500_information_ratio",
+        "cost_multiplier",
         "top_n",
+        "max_turnover_per_rebalance",
+        "retention_rank_bonus",
+        "force_exit_rank",
+        "retention_quality_rank",
         "avg_target_weight_turnover",
         "avg_name_retention",
         "worst_month_return",
@@ -439,20 +502,465 @@ def _write_comparison_markdown(summary: pd.DataFrame, output_dir: Path) -> None:
         "csi500_annual_excess_return",
         "avg_target_weight_turnover",
         "avg_name_retention",
+        "max_turnover_per_rebalance",
         "worst_month_return",
+    }
+    integer_cols = {
+        "top_n",
+        "retention_rank_bonus",
+        "force_exit_rank",
+        "retention_quality_rank",
     }
     for row in summary[available].itertuples(index=False, name=None):
         cells = []
         for col, value in zip(available, row):
             if col == "experiment_id":
                 cells.append(str(value))
+            elif col == "cost_multiplier":
+                cells.append("" if pd.isna(value) else f"{float(value):.1f}x")
             elif col in pct_cols:
                 cells.append(_format_pct(value))
+            elif col in integer_cols:
+                cells.append("" if pd.isna(value) else str(int(float(value))))
             else:
                 cells.append(_format_float(value))
         lines.append("| " + " | ".join(cells) + " |")
 
     (output_dir / "comparison.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_pressure_year_markdown(pressure: pd.DataFrame, output_dir: Path) -> None:
+    if pressure.empty:
+        return
+
+    cols = [
+        "experiment_id",
+        "year",
+        "annual_return",
+        "worst_month",
+        "worst_month_return",
+        "worst_drawdown_month",
+        "worst_month_min_drawdown",
+        "avg_target_weight_turnover",
+        "avg_name_retention",
+    ]
+    available = [c for c in cols if c in pressure.columns]
+    lines = [
+        "# Pressure year comparison",
+        "",
+        "| " + " | ".join(available) + " |",
+        "| " + " | ".join(["---"] * len(available)) + " |",
+    ]
+    pct_cols = {
+        "annual_return",
+        "worst_month_return",
+        "worst_month_min_drawdown",
+        "avg_target_weight_turnover",
+        "avg_name_retention",
+    }
+    for row in pressure[available].itertuples(index=False, name=None):
+        cells = []
+        for col, value in zip(available, row):
+            if col in pct_cols:
+                cells.append(_format_pct(value))
+            elif pd.isna(value):
+                cells.append("")
+            else:
+                cells.append(str(value))
+        lines.append("| " + " | ".join(cells) + " |")
+
+    (output_dir / "pressure_year_comparison.md").write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_pressure_month_markdown(pressure: pd.DataFrame, output_dir: Path) -> None:
+    if pressure.empty:
+        return
+
+    cols = [
+        "experiment_id",
+        "year_month",
+        "monthly_return",
+        "min_drawdown",
+        "rebalance_date",
+        "target_weight_turnover",
+        "name_retention",
+        "added_count",
+        "removed_count",
+        "max_industry_weight",
+        "delta_max_industry_weight",
+        "top_industry_code",
+        "top_industry_weight",
+        "exposure_growth",
+        "delta_exposure_growth",
+        "exposure_reversal",
+        "delta_exposure_reversal",
+        "exposure_momentum",
+        "delta_exposure_momentum",
+        "buffer_retained_count",
+        "turnover_cap_retained_count",
+        "soft_retained_count",
+        "soft_bonus_retained_count",
+        "soft_quality_rejected_count",
+        "retention_rank_bonus",
+        "force_exit_rank",
+        "retention_quality_rank",
+    ]
+    available = [c for c in cols if c in pressure.columns]
+    lines = [
+        "# Pressure month attribution",
+        "",
+        "| " + " | ".join(available) + " |",
+        "| " + " | ".join(["---"] * len(available)) + " |",
+    ]
+    pct_cols = {
+        "monthly_return",
+        "min_drawdown",
+        "target_weight_turnover",
+        "name_retention",
+        "max_industry_weight",
+        "delta_max_industry_weight",
+        "top_industry_weight",
+    }
+    integer_cols = {"retention_rank_bonus", "force_exit_rank", "retention_quality_rank"}
+    for row in pressure[available].itertuples(index=False, name=None):
+        cells = []
+        for col, value in zip(available, row):
+            if col in pct_cols:
+                cells.append(_format_pct(value))
+            elif pd.isna(value):
+                cells.append("")
+            elif col.endswith("_count"):
+                cells.append(str(int(value)))
+            elif col in integer_cols:
+                cells.append(str(int(float(value))))
+            elif isinstance(value, float):
+                cells.append(_format_float(value))
+            else:
+                cells.append(str(value))
+        lines.append("| " + " | ".join(cells) + " |")
+
+    (output_dir / "pressure_month_attribution.md").write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_pressure_holding_contribution_markdown(
+    contribution: pd.DataFrame,
+    output_dir: Path,
+    top_n: int = 5,
+) -> None:
+    if contribution.empty:
+        return
+
+    lines = ["# Pressure month holding contribution", ""]
+    pct_cols = {"target_weight", "holding_return", "return_contribution"}
+
+    def append_table(frame: pd.DataFrame, cols: list[str]) -> None:
+        lines.append("| " + " | ".join(cols) + " |")
+        lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
+        for row in frame[cols].itertuples(index=False, name=None):
+            cells = []
+            for col, value in zip(cols, row):
+                if col in pct_cols or col == "weighted_holding_return":
+                    cells.append(_format_pct(value))
+                elif pd.isna(value):
+                    cells.append("")
+                elif col in {"holding_count", "rank"}:
+                    cells.append(str(int(float(value))))
+                elif isinstance(value, float):
+                    cells.append(_format_float(value))
+                else:
+                    cells.append(str(value))
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
+    grouped = contribution.sort_values(["experiment_id", "year_month"]).groupby(
+        ["experiment_id", "year_month"],
+        dropna=False,
+    )
+    for (experiment_id, month), group in grouped:
+        total_contribution = group["return_contribution"].sum()
+        lines.extend([
+            f"## {experiment_id} / {month}",
+            "",
+            f"Approximate target-weight contribution: {_format_pct(total_contribution)}",
+            "",
+            "### Retention buckets",
+            "",
+        ])
+
+        bucket = (
+            group.groupby("retention_bucket", dropna=False)
+            .agg(
+                holding_count=("ts_code", "count"),
+                target_weight=("target_weight", "sum"),
+                return_contribution=("return_contribution", "sum"),
+            )
+            .reset_index()
+        )
+        bucket["weighted_holding_return"] = (
+            bucket["return_contribution"] / bucket["target_weight"]
+        )
+        bucket = bucket.sort_values("return_contribution")
+        append_table(
+            bucket,
+            [
+                "retention_bucket",
+                "holding_count",
+                "target_weight",
+                "weighted_holding_return",
+                "return_contribution",
+            ],
+        )
+
+        lines.extend(["### Largest industry contributions", ""])
+        industry_keys = ["industry_code"]
+        if "industry_name" in group.columns:
+            industry_keys.append("industry_name")
+        industry = (
+            group.groupby(industry_keys, dropna=False)
+            .agg(
+                holding_count=("ts_code", "count"),
+                target_weight=("target_weight", "sum"),
+                return_contribution=("return_contribution", "sum"),
+            )
+            .reset_index()
+        )
+        industry["weighted_holding_return"] = (
+            industry["return_contribution"] / industry["target_weight"]
+        )
+        industry = (
+            industry.assign(abs_contribution=industry["return_contribution"].abs())
+            .sort_values("abs_contribution", ascending=False)
+            .head(top_n)
+            .drop(columns=["abs_contribution"])
+        )
+        append_table(
+            industry,
+            industry_keys
+            + [
+                "holding_count",
+                "target_weight",
+                "weighted_holding_return",
+                "return_contribution",
+            ],
+        )
+
+        lines.extend(["### Largest detractors", ""])
+        detractors = group.sort_values("return_contribution").head(top_n)
+        append_table(
+            detractors,
+            [
+                "ts_code",
+                "industry_name",
+                "retention_bucket",
+                "rank",
+                "target_weight",
+                "holding_return",
+                "return_contribution",
+            ],
+        )
+
+        lines.extend(["### Largest contributors", ""])
+        contributors = group.sort_values("return_contribution", ascending=False).head(top_n)
+        append_table(
+            contributors,
+            [
+                "ts_code",
+                "industry_name",
+                "retention_bucket",
+                "rank",
+                "target_weight",
+                "holding_return",
+                "return_contribution",
+            ],
+        )
+
+    (output_dir / "pressure_month_holding_contribution.md").write_text(
+        "\n".join(lines).rstrip() + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_pressure_realized_pnl_markdown(
+    contribution: pd.DataFrame,
+    output_dir: Path,
+    top_n: int = 5,
+) -> None:
+    if contribution.empty:
+        return
+
+    lines = ["# Pressure month realized P&L contribution", ""]
+    pct_cols = {
+        "gross_pnl_contribution",
+        "net_pnl_contribution",
+        "cost_contribution",
+        "target_weight",
+    }
+    amount_cols = {
+        "start_market_value",
+        "end_market_value",
+        "buy_amount",
+        "sell_amount",
+        "trade_cost",
+        "gross_pnl",
+        "net_pnl",
+    }
+
+    def append_table(frame: pd.DataFrame, cols: list[str]) -> None:
+        lines.append("| " + " | ".join(cols) + " |")
+        lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
+        for row in frame[cols].itertuples(index=False, name=None):
+            cells = []
+            for col, value in zip(cols, row):
+                if col in pct_cols:
+                    cells.append(_format_pct(value))
+                elif col in amount_cols:
+                    cells.append(_format_float(value))
+                elif pd.isna(value):
+                    cells.append("")
+                elif col == "rank":
+                    cells.append(str(int(float(value))))
+                elif isinstance(value, float):
+                    cells.append(_format_float(value))
+                else:
+                    cells.append(str(value))
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
+    grouped = contribution.sort_values(["experiment_id", "year_month"]).groupby(
+        ["experiment_id", "year_month"],
+        dropna=False,
+    )
+    for (experiment_id, month), group in grouped:
+        totals = group[[
+            "gross_pnl",
+            "net_pnl",
+            "trade_cost",
+            "gross_pnl_contribution",
+            "net_pnl_contribution",
+            "cost_contribution",
+        ]].sum(numeric_only=True)
+        lines.extend([
+            f"## {experiment_id} / {month}",
+            "",
+            (
+                "Net P&L contribution: "
+                f"{_format_pct(totals.get('net_pnl_contribution', pd.NA))}; "
+                f"cost drag: {_format_pct(totals.get('cost_contribution', pd.NA))}"
+            ),
+            "",
+            "### Retention buckets",
+            "",
+        ])
+
+        bucket = (
+            group.groupby("retention_bucket", dropna=False)
+            .agg(
+                holding_count=("ts_code", "count"),
+                start_market_value=("start_market_value", "sum"),
+                end_market_value=("end_market_value", "sum"),
+                buy_amount=("buy_amount", "sum"),
+                sell_amount=("sell_amount", "sum"),
+                trade_cost=("trade_cost", "sum"),
+                net_pnl=("net_pnl", "sum"),
+                net_pnl_contribution=("net_pnl_contribution", "sum"),
+                cost_contribution=("cost_contribution", "sum"),
+            )
+            .reset_index()
+            .sort_values("net_pnl_contribution")
+        )
+        append_table(
+            bucket,
+            [
+                "retention_bucket",
+                "holding_count",
+                "buy_amount",
+                "sell_amount",
+                "trade_cost",
+                "net_pnl",
+                "net_pnl_contribution",
+                "cost_contribution",
+            ],
+        )
+
+        lines.extend(["### Largest industry net P&L", ""])
+        industry_keys = ["industry_code"]
+        if "industry_name" in group.columns:
+            industry_keys.append("industry_name")
+        industry = (
+            group.groupby(industry_keys, dropna=False)
+            .agg(
+                holding_count=("ts_code", "count"),
+                buy_amount=("buy_amount", "sum"),
+                sell_amount=("sell_amount", "sum"),
+                trade_cost=("trade_cost", "sum"),
+                net_pnl=("net_pnl", "sum"),
+                net_pnl_contribution=("net_pnl_contribution", "sum"),
+                cost_contribution=("cost_contribution", "sum"),
+            )
+            .reset_index()
+        )
+        industry = (
+            industry.assign(abs_contribution=industry["net_pnl_contribution"].abs())
+            .sort_values("abs_contribution", ascending=False)
+            .head(top_n)
+            .drop(columns=["abs_contribution"])
+        )
+        append_table(
+            industry,
+            industry_keys
+            + [
+                "holding_count",
+                "trade_cost",
+                "net_pnl",
+                "net_pnl_contribution",
+                "cost_contribution",
+            ],
+        )
+
+        lines.extend(["### Largest detractors", ""])
+        detractors = group.sort_values("net_pnl_contribution").head(top_n)
+        append_table(
+            detractors,
+            [
+                "ts_code",
+                "industry_name",
+                "retention_bucket",
+                "rank",
+                "target_weight",
+                "buy_amount",
+                "sell_amount",
+                "trade_cost",
+                "net_pnl_contribution",
+            ],
+        )
+
+        lines.extend(["### Largest contributors", ""])
+        contributors = group.sort_values("net_pnl_contribution", ascending=False).head(top_n)
+        append_table(
+            contributors,
+            [
+                "ts_code",
+                "industry_name",
+                "retention_bucket",
+                "rank",
+                "target_weight",
+                "buy_amount",
+                "sell_amount",
+                "trade_cost",
+                "net_pnl_contribution",
+            ],
+        )
+
+    (output_dir / "pressure_month_realized_pnl_contribution.md").write_text(
+        "\n".join(lines).rstrip() + "\n",
+        encoding="utf-8",
+    )
 
 
 def main():
@@ -486,6 +994,10 @@ def main():
     logger.info("Cached %d non-empty rebalance universes", len(universe_by_date))
 
     summary_records = []
+    pressure_records = []
+    pressure_month_records = []
+    pressure_holding_records = []
+    pressure_realized_records = []
     for experiment in experiments:
         experiment_id = experiment["experiment_id"]
         logger.info("Running experiment: %s", experiment_id)
@@ -517,6 +1029,50 @@ def main():
         monthly_drawdown_summary = summarize_monthly_drawdown_diagnostics(monthly_drawdown)
         turnover_by_year = summarize_rebalance_turnover_by_year(turnover)
 
+        if experiment_id in PRESSURE_EXPERIMENT_IDS:
+            pressure = build_pressure_year_diagnostics(
+                annual_returns,
+                monthly_drawdown,
+                turnover_by_year,
+                PRESSURE_YEARS,
+            )
+            if not pressure.empty:
+                pressure.insert(0, "experiment_id", experiment_id)
+                pressure_records.append(pressure)
+
+            pressure_month = build_pressure_month_attribution(
+                monthly_drawdown,
+                turnover,
+                exposure,
+                target_weights,
+                PRESSURE_MONTHS,
+                FACTOR_NAMES,
+            )
+            if not pressure_month.empty:
+                pressure_month.insert(0, "experiment_id", experiment_id)
+                pressure_month_records.append(pressure_month)
+
+        if experiment_id in PRESSURE_HOLDING_EXPERIMENT_IDS:
+            pressure_holding = build_pressure_month_holding_contribution(
+                target_weights,
+                price_panel,
+                PRESSURE_HOLDING_MONTHS,
+            )
+            if not pressure_holding.empty:
+                pressure_holding.insert(0, "experiment_id", experiment_id)
+                pressure_holding_records.append(pressure_holding)
+
+            pressure_realized = build_pressure_month_realized_pnl_contribution(
+                results.get("nav", pd.DataFrame()),
+                results.get("positions", pd.DataFrame()),
+                results.get("trades", pd.DataFrame()),
+                target_weights,
+                PRESSURE_HOLDING_MONTHS,
+            )
+            if not pressure_realized.empty:
+                pressure_realized.insert(0, "experiment_id", experiment_id)
+                pressure_realized_records.append(pressure_realized)
+
         _save_experiment_outputs(
             experiment,
             output_dir,
@@ -545,6 +1101,10 @@ def main():
             "top_n": selection.get("top_n", config["strategy"]["portfolio"].get("top_n", 50)),
             "entry_rank": selection.get("entry_rank"),
             "exit_rank": selection.get("exit_rank"),
+            "max_turnover_per_rebalance": selection.get("max_turnover_per_rebalance"),
+            "retention_rank_bonus": selection.get("retention_rank_bonus"),
+            "force_exit_rank": selection.get("force_exit_rank"),
+            "retention_quality_rank": selection.get("retention_quality_rank"),
             "cost_multiplier": cost_multiplier,
             **flatten_performance_metrics(metrics),
             **exposure_summary,
@@ -556,6 +1116,38 @@ def main():
     summary = pd.DataFrame(summary_records)
     summary.to_csv(experiment_root / "summary.csv", index=False, encoding="utf-8-sig")
     _write_comparison_markdown(summary, experiment_root)
+    if pressure_records:
+        pressure = pd.concat(pressure_records, ignore_index=True)
+        pressure.to_csv(
+            experiment_root / "pressure_year_comparison.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        _write_pressure_year_markdown(pressure, experiment_root)
+    if pressure_month_records:
+        pressure_month = pd.concat(pressure_month_records, ignore_index=True)
+        pressure_month.to_csv(
+            experiment_root / "pressure_month_attribution.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        _write_pressure_month_markdown(pressure_month, experiment_root)
+    if pressure_holding_records:
+        pressure_holding = pd.concat(pressure_holding_records, ignore_index=True)
+        pressure_holding.to_csv(
+            experiment_root / "pressure_month_holding_contribution.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        _write_pressure_holding_contribution_markdown(pressure_holding, experiment_root)
+    if pressure_realized_records:
+        pressure_realized = pd.concat(pressure_realized_records, ignore_index=True)
+        pressure_realized.to_csv(
+            experiment_root / "pressure_month_realized_pnl_contribution.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        _write_pressure_realized_pnl_markdown(pressure_realized, experiment_root)
     logger.info("Saved weight experiment comparison to %s", experiment_root)
 
 
